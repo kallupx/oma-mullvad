@@ -8,6 +8,10 @@ Item {
 
   property var settings: ({})
   property int pollInterval: 30000
+  readonly property string commandGuard: String(Qt.resolvedUrl("bounded-command")).replace(/^file:\/\//, "")
+  readonly property int finiteOutputLines: 4096
+  readonly property int finiteOutputChars: 262144
+  readonly property int listenerLineChars: 8192
 
   property bool installed: false
   property bool daemonRunning: false
@@ -52,9 +56,13 @@ Item {
   property string _readKind: ""
   property var _readLines: []
   property var _readErrorLines: []
+  property int _readOutputLines: 0
+  property int _readOutputChars: 0
   property var _actionQueue: []
   property var _actionLines: []
   property var _actionErrorLines: []
+  property int _actionOutputLines: 0
+  property int _actionOutputChars: 0
   readonly property bool busy: actionProcess.running || _actionQueue.length > 0
     || readProcess.running || _readQueue.length > 0
 
@@ -63,9 +71,54 @@ Item {
   }
 
   function _shortError(value, fallback) {
-    var text = _redact(value).replace(/\s+/g, " ").trim()
+    var text = Model.plainText(value, 181)
     if (!text) text = fallback
     return text.length > 180 ? text.slice(0, 177) + "…" : text
+  }
+
+  function _finiteCommand(command, timeoutSeconds) {
+    return [commandGuard, "finite", String(timeoutSeconds), String(finiteOutputLines),
+            String(finiteOutputChars), "--"].concat(command || [])
+  }
+
+  function _listenerCommand(command) {
+    return [commandGuard, "listen", String(listenerLineChars), "--"].concat(command || [])
+  }
+
+  function _resetReadOutput() {
+    _readLines = []
+    _readErrorLines = []
+    _readOutputLines = 0
+    _readOutputChars = 0
+  }
+
+  function _appendReadOutput(line, errorStream) {
+    if (_readOutputLines >= finiteOutputLines || _readOutputChars >= finiteOutputChars) return
+    var value = _redact(line)
+    var remaining = finiteOutputChars - _readOutputChars
+    if (value.length > remaining) value = value.slice(0, remaining)
+    if (errorStream) _readErrorLines.push(value)
+    else _readLines.push(value)
+    _readOutputLines++
+    _readOutputChars += value.length + 1
+  }
+
+  function _resetActionOutput() {
+    _actionLines = []
+    _actionErrorLines = []
+    _actionOutputLines = 0
+    _actionOutputChars = 0
+  }
+
+  function _appendActionOutput(line, errorStream) {
+    if (_actionOutputLines >= finiteOutputLines || _actionOutputChars >= finiteOutputChars) return
+    var value = _redact(line)
+    var remaining = finiteOutputChars - _actionOutputChars
+    if (value.length > remaining) value = value.slice(0, remaining)
+    if (errorStream) _actionErrorLines.push(value)
+    else _actionLines.push(value)
+    _actionOutputLines++
+    _actionOutputChars += value.length + 1
   }
 
   function _hasRead(kind) {
@@ -87,9 +140,8 @@ Item {
     var request = queue.shift()
     _readQueue = queue
     _readKind = request.kind
-    _readLines = []
-    _readErrorLines = []
-    readProcess.command = request.command
+    _resetReadOutput()
+    readProcess.command = _finiteCommand(request.command, 10)
     readProcess.running = true
   }
 
@@ -129,8 +181,7 @@ Item {
     ip = String(location.ipv4 || location.ipv6 || "")
     if (parsed.lockedDown !== undefined) lockdown = parsed.lockedDown === true
     _updateCurrentCodes()
-    if (state === "connected")
-      statusText = city ? "Connected to " + city + (country ? ", " + country : "") : "Connected"
+    if (state === "connected") statusText = "Connected"
     else if (state === "connecting") statusText = "Connecting…"
     else if (state === "disconnecting") statusText = "Disconnecting…"
     else if (state === "disconnected") statusText = "Disconnected"
@@ -319,11 +370,10 @@ Item {
     var queue = _actionQueue.slice(0)
     var action = queue.shift()
     _actionQueue = queue
-    _actionLines = []
-    _actionErrorLines = []
+    _resetActionOutput()
     actionProcess.label = action.label
     actionProcess.secret = ""
-    actionProcess.command = action.command
+    actionProcess.command = _finiteCommand(action.command, 20)
     actionStatus = action.label + "…"
     actionProcess.running = true
   }
@@ -364,10 +414,9 @@ Item {
       secret = ""
       return
     }
-    _actionLines = []
-    _actionErrorLines = []
+    _resetActionOutput()
     actionProcess.label = "Logging in"
-    actionProcess.command = command
+    actionProcess.command = _finiteCommand(command, 20)
     actionProcess.secret = secret
     actionStatus = "Logging in…"
     secret = ""
@@ -505,10 +554,10 @@ Item {
     command: []
     running: false
     stdout: SplitParser {
-      onRead: function(line) { root._readLines.push(root._redact(line)) }
+      onRead: function(line) { root._appendReadOutput(line, false) }
     }
     stderr: SplitParser {
-      onRead: function(line) { root._readErrorLines.push(root._redact(line)) }
+      onRead: function(line) { root._appendReadOutput(line, true) }
     }
     onExited: function(exitCode) {
       var kind = root._readKind
@@ -522,13 +571,14 @@ Item {
 
   Process {
     id: listenerProcess
-    command: ["mullvad", "status", "--json", "listen"]
+    command: root._listenerCommand(["mullvad", "status", "--json", "listen"])
     running: false
     stdout: SplitParser {
       onRead: function(line) {
-        if (!String(line || "").trim()) return
+        var boundedLine = String(line || "").slice(0, root.listenerLineChars)
+        if (!boundedLine.trim()) return
         try {
-          root._applyStatus(line)
+          root._applyStatus(boundedLine)
         } catch (e) {
           root.lastError = root._shortError(e, "Could not parse live Mullvad status")
         }
@@ -536,7 +586,8 @@ Item {
     }
     stderr: SplitParser {
       onRead: function(line) {
-        if (String(line || "").trim()) root.lastError = root._shortError(line, "Mullvad status listener failed")
+        var boundedLine = String(line || "").slice(0, root.listenerLineChars)
+        if (boundedLine.trim()) root.lastError = root._shortError(boundedLine, "Mullvad status listener failed")
       }
     }
     onExited: function() {
@@ -563,10 +614,10 @@ Item {
       }
     }
     stdout: SplitParser {
-      onRead: function(line) { root._actionLines.push(root._redact(line)) }
+      onRead: function(line) { root._appendActionOutput(line, false) }
     }
     stderr: SplitParser {
-      onRead: function(line) { root._actionErrorLines.push(root._redact(line)) }
+      onRead: function(line) { root._appendActionOutput(line, true) }
     }
     onExited: function(exitCode) {
       var output = root._actionLines.join("\n")

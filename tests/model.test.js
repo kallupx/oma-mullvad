@@ -36,6 +36,8 @@ test("status JSON and listen events normalize connection details", () => {
         "nothing");
     assert.equal(Model.parseStatus({ state: "disconnecting", details: "reconnect" }).disconnectingAction,
         "reconnect");
+    assert.equal(Model.parseStatus({ state: "disconnecting", details: "not-a-real-action" }).disconnectingAction,
+        "unknown");
 
     const tokenValue = "x".repeat(12);
     const failed = Model.parseStatus({ state: "error", details: { error: `token=${tokenValue} account ${accountNumber}` } });
@@ -125,6 +127,7 @@ WireGuard constraints
     assert.equal(Model.parseRelayConstraints("Location: unsupported constraint").location.type, "unknown");
     assert.equal(Model.parseRelayConstraints("Ownership: Mullvad-owned servers").ownership, "owned");
     assert.equal(Model.parseRelayConstraints("Ownership: Rented servers").ownership, "rented");
+    assert.equal(Model.parseRelayConstraints("IP protocol: malicious").ipVersion, "any");
 });
 
 test("account parser exposes expiry and device but never the account number", () => {
@@ -175,6 +178,7 @@ lwo settings: any port`);
         mode: "udp2tcp", udp2tcpPort: "443", shadowsocksPort: "any",
         wireguardPort: "53", lwoPort: "any"
     });
+    assert.equal(Model.parseAntiCensorship("udp2tcp settings: port 99999").udp2tcpPort, "any");
 
     assert.deepEqual(Model.parseExcludedPids(`Excluded PIDs:
   1234: /usr/bin/firefox
@@ -240,4 +244,39 @@ test("redaction removes account and token-like secrets", () => {
     assert.ok(!safe.includes(bearerValue));
     assert.ok(!safe.includes(passwordValue));
     assert.match(safe, /redacted/);
+});
+
+test("external records and fields are bounded before reaching QML models", () => {
+    const lines = ["<b>Testland</b> (zz)", "\t<b>First city</b> (000) @ 1°N, 1°E"];
+    for (let i = 0; i < 140; i++)
+        lines.push(`\t\tzz-000-wg-${String(i).padStart(3, "0")} (192.0.2.1) - hosted by <i>Provider</i> (rented)`);
+    for (let i = 1; i < 520; i++) {
+        const code = i.toString(36).padStart(3, "0");
+        lines.push(`\tCity ${i} (${code}) @ 1°N, 1°E`);
+    }
+
+    const relays = Model.parseRelayList(lines.join("\n"));
+    assert.equal(relays.locations.length, 512);
+    assert.equal(relays.locations[0].servers.length, 128);
+    assert.equal(relays.locations[0].country, "Testland");
+    assert.equal(relays.locations[0].servers[0].provider, "Provider");
+
+    const excluded = Model.parseExcludedPids(Array.from({ length: 300 }, (_, i) =>
+        `${i + 1}: <b>${"x".repeat(700)}</b>`).join("\n"));
+    assert.equal(excluded.length, 256);
+    assert.ok(excluded[0].command.length <= 512);
+    assert.ok(!excluded[0].command.includes("<"));
+
+    const status = Model.parseStatus({
+        state: "<b>connected</b>",
+        details: { location: { country: "<b>Finland</b>", ipv4: "999.1.1.1", hostname: "bad host" } }
+    });
+    assert.equal(status.state, "unknown");
+    assert.equal(status.location.country, "Finland");
+    assert.equal(status.location.ipv4, "");
+    assert.equal(status.location.hostname, "");
+    assert.equal(Model.parseRelayConstraints("Location: hostname bad/host").location.type, "unknown");
+
+    const dns = Model.parseDns("Servers: " + Array.from({ length: 20 }, (_, i) => `192.0.2.${i + 1}`).join(", "));
+    assert.equal(dns.customServers.length, 16);
 });

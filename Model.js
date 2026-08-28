@@ -3,22 +3,57 @@
 // Pure Mullvad CLI parsing and argv construction. Keep this file usable from
 // QML; tests strip the QML pragma and evaluate it in a Node vm context.
 
+var MAX_INPUT_CHARS = 262144;
+var MAX_INPUT_LINES = 4096;
+var MAX_LINE_CHARS = 8192;
+var MAX_FIELD_CHARS = 256;
+var MAX_COUNTRIES = 128;
+var MAX_LOCATIONS = 512;
+var MAX_SERVERS = 2048;
+var MAX_SERVERS_PER_LOCATION = 128;
+var MAX_PROVIDERS = 128;
+var MAX_EXCLUDED_PIDS = 256;
+
 function text(value) {
     return value === undefined || value === null ? "" : String(value);
 }
 
+function boundedInput(value, maxChars) {
+    return text(value).slice(0, maxChars || MAX_INPUT_CHARS);
+}
+
+function boundedLines(value, maxLines, maxChars) {
+    var lines = boundedInput(value, maxChars || MAX_INPUT_CHARS).split(/\r?\n/);
+    var limit = Math.min(lines.length, maxLines || MAX_INPUT_LINES);
+    var result = [];
+    for (var i = 0; i < limit; ++i)
+        result.push(lines[i].slice(0, MAX_LINE_CHARS));
+    return result;
+}
+
 function redact(value) {
     return text(value)
-        .replace(/\b(?:\d[ -]?){15}\d\b/g, "<redacted-account>")
-        .replace(/\b(Bearer)\s+[A-Za-z0-9._~+\/=\-]{8,}/gi, "$1 <redacted>")
+        .replace(/\b(?:\d[ -]?){15}\d\b/g, "[redacted-account]")
+        .replace(/\b(Bearer)\s+[A-Za-z0-9._~+\/=\-]{8,}/gi, "$1 [redacted]")
         .replace(/\b(token|secret|password|authorization|api[_-]?key)\s*([:=])\s*([^\s,;]+)/gi,
-                 "$1$2<redacted>");
+                 "$1$2[redacted]");
+}
+
+function plainText(value, maxChars) {
+    var limit = Math.max(1, Math.min(Number(maxChars) || MAX_FIELD_CHARS, 4096));
+    return redact(text(value).slice(0, limit))
+        .replace(/<[^>]*>/g, " ")
+        .replace(/[\u0000-\u001f\u007f<>]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, limit);
 }
 
 function parseJsonLines(raw) {
     if (raw && typeof raw === "object")
         return [raw];
-    var lines = text(raw).trim().split(/\r?\n/);
+    var bounded = boundedInput(raw, MAX_INPUT_CHARS);
+    var lines = boundedLines(bounded, 32, MAX_INPUT_CHARS);
     var values = [];
     for (var i = 0; i < lines.length; ++i) {
         try {
@@ -27,7 +62,7 @@ function parseJsonLines(raw) {
     }
     if (!values.length) {
         try {
-            values.push(JSON.parse(text(raw)));
+            values.push(JSON.parse(bounded));
         } catch (_) {}
     }
     return values;
@@ -54,23 +89,32 @@ function parseStatus(raw) {
     var details = rawDetails && typeof rawDetails === "object" ? rawDetails : {};
     var location = details.location || value.location || {};
     var state = text(value.state || "unknown").toLowerCase();
+    if (["connected", "connecting", "disconnecting", "disconnected", "error", "blocked"].indexOf(state) === -1)
+        state = "unknown";
     var errorValue = details.error || value.error || "";
+    var hostname = plainText(location.hostname || details.hostname, 253).toLowerCase();
+    var entryHostname = plainText(location.entry_hostname || details.entry_hostname, 253).toLowerCase();
+    var ipv4 = plainText(location.ipv4, 45);
+    var ipv6 = plainText(location.ipv6, 45);
+    var disconnectingAction = state === "disconnecting"
+        ? plainText(typeof rawDetails === "string" ? rawDetails : details.action, 32).toLowerCase() : "";
+    if (["nothing", "block", "reconnect"].indexOf(disconnectingAction) === -1)
+        disconnectingAction = state === "disconnecting" ? "unknown" : "";
     return {
         state: state,
         connected: state === "connected",
         connecting: state === "connecting",
         disconnecting: state === "disconnecting",
-        disconnectingAction: state === "disconnecting"
-            ? text(typeof rawDetails === "string" ? rawDetails : details.action).toLowerCase() : "",
-        error: redact(typeof errorValue === "string" ? errorValue : JSON.stringify(errorValue)),
-        warning: text(details.warning || value.warning || ""),
+        disconnectingAction: disconnectingAction,
+        error: plainText(typeof errorValue === "string" ? errorValue : JSON.stringify(errorValue), 512),
+        warning: plainText(details.warning || value.warning || "", 256),
         location: {
-            country: text(location.country),
-            city: text(location.city),
-            ipv4: text(location.ipv4),
-            ipv6: text(location.ipv6),
-            hostname: text(location.hostname || details.hostname),
-            entryHostname: text(location.entry_hostname || details.entry_hostname),
+            country: plainText(location.country, 128),
+            city: plainText(location.city, 128),
+            ipv4: validateIpv4(ipv4) ? ipv4 : "",
+            ipv6: validateIpv6(ipv6) ? ipv6 : "",
+            hostname: validateHostname(hostname) ? hostname : "",
+            entryHostname: validateHostname(entryHostname) ? entryHostname : "",
             mullvadExitIp: location.mullvad_exit_ip === true
         },
         lockedDown: details.locked_down === true || value.locked_down === true
@@ -80,29 +124,43 @@ function parseStatus(raw) {
 function parseRelayList(raw) {
     var countries = [];
     var locations = [];
-    var providerMap = {};
+    var providers = [];
     var country = null;
     var city = null;
-    var lines = text(raw).split(/\r?\n/);
+    var serverCount = 0;
+    var lines = boundedLines(raw, MAX_INPUT_LINES, MAX_INPUT_CHARS);
     for (var i = 0; i < lines.length; ++i) {
         var line = lines[i];
         var match = line.match(/^([^\t].*?) \(([a-z]{2})\)\s*$/i);
         if (match) {
-            country = { name: match[1].trim(), code: match[2].toLowerCase(), cities: [] };
+            if (countries.length >= MAX_COUNTRIES) {
+                country = null;
+                city = null;
+                continue;
+            }
+            var countryName = plainText(match[1], 128);
+            if (!countryName) continue;
+            country = { name: countryName, code: match[2].toLowerCase(), cities: [] };
             countries.push(country);
             city = null;
             continue;
         }
         match = line.match(/^\t([^\t].*?) \(([a-z0-9]{3})\)\s+@\s*([+-]?\d+(?:\.\d+)?)°[NS],\s*([+-]?\d+(?:\.\d+)?)°[EW]/i);
-        if (match && country) {
+        if (match && country && locations.length < MAX_LOCATIONS) {
+            var latitude = Number(match[3]);
+            var longitude = Number(match[4]);
+            var cityName = plainText(match[1], 128);
+            if (!cityName || !isFinite(latitude) || !isFinite(longitude)
+                    || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180)
+                continue;
             city = {
-                name: match[1].trim(),
+                name: cityName,
                 code: match[2].toLowerCase(),
                 key: country.code + "-" + match[2].toLowerCase(),
                 country: country.name,
                 countryCode: country.code,
-                latitude: Number(match[3]),
-                longitude: Number(match[4]),
+                latitude: latitude,
+                longitude: longitude,
                 servers: []
             };
             country.cities.push(city);
@@ -110,18 +168,24 @@ function parseRelayList(raw) {
             continue;
         }
         match = line.match(/^\t\t(\S+) \(([^)]*)\) - hosted by (.+) \((rented|Mullvad-owned)\)\s*$/i);
-        if (match && city) {
-            var provider = match[3].trim();
-            providerMap[provider] = true;
+        if (match && city && serverCount < MAX_SERVERS && city.servers.length < MAX_SERVERS_PER_LOCATION) {
+            var hostname = plainText(match[1], 253).toLowerCase();
+            var provider = plainText(match[3], 128);
+            if (!validateHostname(hostname) || !provider) continue;
+            var ips = match[2].split(",").map(function(ip) { return ip.trim(); })
+                .filter(validateDnsAddress).slice(0, 8);
+            if (providers.indexOf(provider) === -1 && providers.length < MAX_PROVIDERS)
+                providers.push(provider);
             city.servers.push({
-                hostname: match[1],
-                ips: match[2].split(",").map(function(ip) { return ip.trim(); }),
+                hostname: hostname,
+                ips: ips,
                 provider: provider,
                 ownership: match[4].toLowerCase() === "rented" ? "rented" : "owned"
             });
+            serverCount++;
         }
     }
-    return { countries: countries, locations: locations, providers: Object.keys(providerMap).sort() };
+    return { countries: countries, locations: locations, providers: providers.sort() };
 }
 
 function normalizeOwnership(value) {
@@ -230,8 +294,8 @@ function normalizeLocation(value) {
     return {
         countryCode: countryCode,
         cityCode: cityCode,
-        country: text(value.countryName || (value.countryCode ? value.country : "")),
-        city: text(value.cityName || (value.cityCode ? value.city : value.name)),
+        country: plainText(value.countryName || (value.countryCode ? value.country : ""), 128),
+        city: plainText(value.cityName || (value.cityCode ? value.city : value.name), 128),
         key: countryCode + "-" + cityCode
     };
 }
@@ -302,7 +366,7 @@ function emptyConstraint() {
 }
 
 function parseConstraint(value) {
-    var raw = text(value).trim();
+    var raw = plainText(value, 512);
     var result = emptyConstraint();
     var match;
     if (!raw || /^any$/i.test(raw))
@@ -319,16 +383,24 @@ function parseConstraint(value) {
         result.countryCode = match[1].toLowerCase();
         result.cityCode = match[2].toLowerCase();
     } else if ((match = raw.match(/^hostname\s+([a-z]{2})\s+([a-z0-9]{3})\s+(\S+)$/i))) {
+        if (!validateHostname(match[3])) {
+            result.type = "unknown";
+            return result;
+        }
         result.type = "hostname";
         result.countryCode = match[1].toLowerCase();
         result.cityCode = match[2].toLowerCase();
-        result.hostname = match[3];
+        result.hostname = match[3].toLowerCase();
     } else if ((match = raw.match(/^hostname\s+(\S+)$/i))) {
         var codes = match[1].match(/^([a-z]{2})-([a-z0-9]{3})(?:-|$)/i);
+        if (!validateHostname(match[1])) {
+            result.type = "unknown";
+            return result;
+        }
         result.type = "hostname";
         result.countryCode = codes ? codes[1].toLowerCase() : "";
         result.cityCode = codes ? codes[2].toLowerCase() : "";
-        result.hostname = match[1];
+        result.hostname = match[1].toLowerCase();
     } else result.type = "unknown";
     return result;
 }
@@ -342,20 +414,22 @@ function parseRelayConstraints(raw) {
         multihop: false,
         entry: emptyConstraint()
     };
-    var lines = text(raw).split(/\r?\n/);
+    var lines = boundedLines(raw, 128, 32768);
     for (var i = 0; i < lines.length; ++i) {
         var match = lines[i].match(/^\s*([^:]+):\s*(.*?)\s*$/);
         if (!match)
             continue;
         var key = match[1].trim().toLowerCase();
-        var value = match[2].trim();
+        var value = plainText(match[2], 512);
         if (key === "location")
             result.location = parseConstraint(value);
         else if (key === "provider(s)" && value.toLowerCase() !== "any")
-            result.providers = value.split(/\s*,\s*/).filter(Boolean);
+            result.providers = value.split(/\s*,\s*/).map(function(provider) {
+                return plainText(provider, 128);
+            }).filter(Boolean).slice(0, 64);
         else if (key === "ownership")
             result.ownership = normalizeOwnership(value);
-        else if (key === "ip protocol")
+        else if (key === "ip protocol" && ["any", "ipv4", "ipv6"].indexOf(value.toLowerCase()) !== -1)
             result.ipVersion = value.toLowerCase();
         else if (key === "multihop state")
             result.multihop = /^(enabled|on|true)$/i.test(value);
@@ -366,12 +440,12 @@ function parseRelayConstraints(raw) {
 }
 
 function parseAccount(raw, nowMs) {
-    var safe = redact(raw);
+    var safe = redact(boundedInput(raw, 32768));
     if (/not logged in|no account|logged out/i.test(safe))
         return { loggedIn: false, expiresAt: "", expiryMs: 0, daysRemaining: null, deviceName: "" };
     var expiry = safe.match(/^\s*Expires at:\s*(.+?)\s*$/im);
     var device = safe.match(/^\s*Device name:\s*(.+?)\s*$/im);
-    var expiryText = expiry ? expiry[1].trim() : "";
+    var expiryText = expiry ? plainText(expiry[1], 128) : "";
     var iso = expiryText.replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2}:\d{2})\s*([+-]\d{2}:\d{2})$/, "$1T$2$3");
     var expiryMs = expiryText ? Date.parse(iso) : NaN;
     var loggedIn = !!(expiry || device || /Mullvad account:/i.test(safe));
@@ -380,12 +454,12 @@ function parseAccount(raw, nowMs) {
         expiresAt: expiryText,
         expiryMs: isNaN(expiryMs) ? 0 : expiryMs,
         daysRemaining: isNaN(expiryMs) ? null : Math.ceil((expiryMs - (nowMs === undefined ? Date.now() : nowMs)) / 86400000),
-        deviceName: device ? device[1].trim() : ""
+        deviceName: device ? plainText(device[1], 128) : ""
     };
 }
 
 function parseToggle(raw) {
-    var matches = text(raw).toLowerCase().match(/\b(on|off|enabled|disabled|allow|block|true|false|yes|no)\b/g);
+    var matches = boundedInput(raw, 4096).toLowerCase().match(/\b(on|off|enabled|disabled|allow|block|true|false|yes|no)\b/g);
     if (!matches || !matches.length)
         return null;
     return /^(on|enabled|allow|true|yes)$/.test(matches[matches.length - 1]);
@@ -410,19 +484,19 @@ function parseDns(raw) {
         "block gambling": "blockGambling",
         "block social media": "blockSocialMedia"
     };
-    var lines = text(raw).split(/\r?\n/);
+    var lines = boundedLines(raw, 128, 32768);
     for (var i = 0; i < lines.length; ++i) {
         var match = lines[i].match(/^\s*([^:]+):\s*(.*?)\s*$/);
         if (!match)
             continue;
         var key = match[1].trim().toLowerCase();
-        var value = match[2].trim();
+        var value = plainText(match[2], 1024);
         if (key === "custom dns") {
             result.mode = /^no|off|false$/i.test(value) ? "default" : "custom";
             if (!/^yes|on|true|no|off|false$/i.test(value))
-                result.customServers = value.split(/[\s,]+/).filter(Boolean);
+                result.customServers = value.split(/[\s,]+/).filter(validateDnsAddress).slice(0, 16);
         } else if (key === "servers" || key === "custom dns servers") {
-            result.customServers = value.split(/[\s,]+/).filter(Boolean);
+            result.customServers = value.split(/[\s,]+/).filter(validateDnsAddress).slice(0, 16);
             if (result.customServers.length)
                 result.mode = "custom";
         } else if (map[key]) {
@@ -435,27 +509,32 @@ function parseDns(raw) {
 function parseAntiCensorship(raw) {
     var result = { mode: "auto", udp2tcpPort: "any", shadowsocksPort: "any", wireguardPort: "any", lwoPort: "any" };
     var keys = { "udp2tcp": "udp2tcpPort", "shadowsocks": "shadowsocksPort", "wireguard-port": "wireguardPort", "lwo": "lwoPort" };
-    var lines = text(raw).split(/\r?\n/);
+    var lines = boundedLines(raw, 128, 32768);
     for (var i = 0; i < lines.length; ++i) {
         var mode = lines[i].match(/^\s*mode:\s*(\S+)/i);
         if (mode) {
-            result.mode = mode[1].toLowerCase();
+            var parsedMode = mode[1].toLowerCase();
+            if (["auto", "off", "wireguard-port", "udp2tcp", "shadowsocks", "quic", "lwo"].indexOf(parsedMode) !== -1)
+                result.mode = parsedMode;
             continue;
         }
         var setting = lines[i].match(/^\s*(udp2tcp|shadowsocks|wireguard-port|lwo) settings:\s*(?:any port|port\s+)?(\d+|any)?/i);
-        if (setting)
-            result[keys[setting[1].toLowerCase()]] = setting[2] || "any";
+        if (setting) {
+            var port = setting[2] || "any";
+            result[keys[setting[1].toLowerCase()]] = port === "any" || validatePort(port) ? port : "any";
+        }
     }
     return result;
 }
 
 function parseExcludedPids(raw) {
     var result = [];
-    var lines = text(raw).split(/\r?\n/);
-    for (var i = 0; i < lines.length; ++i) {
+    var lines = boundedLines(raw, MAX_INPUT_LINES, MAX_INPUT_CHARS);
+    for (var i = 0; i < lines.length && result.length < MAX_EXCLUDED_PIDS; ++i) {
         var match = lines[i].match(/^\s*(\d+)\s*(?::|\s)\s*(.*?)\s*$/);
-        if (match)
-            result.push({ pid: Number(match[1]), command: match[2] });
+        var pid = match ? Number(match[1]) : 0;
+        if (match && pid >= 1 && pid <= 2147483647)
+            result.push({ pid: pid, command: plainText(match[2], 512) });
     }
     return result;
 }
@@ -512,7 +591,7 @@ function validateDnsAddress(value) {
 
 function safeArg(value, label) {
     var result = text(value);
-    if (!result || /[\x00\r\n]/.test(result))
+    if (!result || result.length > 512 || /[\x00\r\n]/.test(result))
         throw new Error("Invalid " + label);
     return result;
 }
@@ -581,7 +660,7 @@ function dnsDefaultArgs(flags) {
 function dnsCustomArgs(servers) {
     if (typeof servers === "string")
         servers = servers.split(/[\s,]+/).filter(Boolean);
-    if (!Array.isArray(servers) || !servers.length || !servers.every(validateDnsAddress))
+    if (!Array.isArray(servers) || !servers.length || servers.length > 16 || !servers.every(validateDnsAddress))
         throw new Error("Invalid custom DNS server");
     return ["mullvad", "dns", "set", "custom"].concat(servers);
 }
@@ -618,7 +697,7 @@ function argv(action, params) {
     case "location": return ["mullvad", "relay", "set", "location"].concat(locationArgs(params));
     case "providers": {
         var providers = params.providers || [];
-        if (!Array.isArray(providers))
+        if (!Array.isArray(providers) || providers.length > 64)
             throw new Error("Invalid providers");
         providers = providers.length ? providers.map(function(value) { return safeArg(value, "provider"); }) : ["any"];
         return ["mullvad", "relay", "set", "provider"].concat(providers);
@@ -653,6 +732,7 @@ function argv(action, params) {
 
 var api = {
     redact: redact,
+    plainText: plainText,
     parseStatus: parseStatus,
     parseRelayList: parseRelayList,
     filterServers: filterServers,

@@ -1,0 +1,102 @@
+#!/bin/bash
+
+set -uo pipefail
+
+fail() {
+  echo "bounded-command: $*" >&2
+  exit 2
+}
+
+positive_integer() {
+  [[ $1 =~ ^[1-9][0-9]*$ ]]
+}
+
+mode=${1:-}
+shift || true
+
+case "$mode" in
+finite)
+  (( $# >= 5 )) || fail "finite requires timeout, line limit, byte limit, --, and a command"
+  timeout_seconds=$1
+  max_lines=$2
+  max_bytes=$3
+  shift 3
+  [[ ${1:-} == -- ]] || fail "missing --"
+  shift
+  (( $# > 0 )) || fail "missing command"
+  positive_integer "$timeout_seconds" && (( timeout_seconds <= 300 )) || fail "invalid timeout"
+  positive_integer "$max_lines" && (( max_lines <= 100000 )) || fail "invalid line limit"
+  positive_integer "$max_bytes" && (( max_bytes <= 16777216 )) || fail "invalid byte limit"
+  exec /usr/bin/timeout --signal=TERM --kill-after=1s "${timeout_seconds}s" \
+    "$0" finite-run "$max_lines" "$max_bytes" -- "$@"
+  ;;
+finite-run)
+  (( $# >= 4 )) || fail "invalid finite invocation"
+  max_lines=$1
+  max_bytes=$2
+  shift 2
+  [[ ${1:-} == -- ]] || fail "missing --"
+  shift
+  (( $# > 0 )) || fail "missing command"
+  positive_integer "$max_lines" && (( max_lines <= 100000 )) || fail "invalid line limit"
+  positive_integer "$max_bytes" && (( max_bytes <= 16777216 )) || fail "invalid byte limit"
+  command=("$@")
+  ;;
+listen)
+  (( $# >= 3 )) || fail "listen requires line-byte limit, --, and a command"
+  max_line_bytes=$1
+  shift
+  [[ ${1:-} == -- ]] || fail "missing --"
+  shift
+  (( $# > 0 )) || fail "missing command"
+  positive_integer "$max_line_bytes" && (( max_line_bytes <= 1048576 )) || fail "invalid line-byte limit"
+  command=("$@")
+  ;;
+*) fail "expected finite or listen" ;;
+esac
+
+finite_cap() {
+  /usr/bin/head -n "$max_lines" | /usr/bin/head -c "$max_bytes"
+}
+
+line_cap() {
+  /usr/bin/stdbuf -oL /usr/bin/fold -b -w "$max_line_bytes"
+}
+
+child_pid=""
+out_pid=""
+err_pid=""
+
+stop_children() {
+  trap - TERM INT HUP
+  [[ -z $child_pid ]] || kill -TERM "$child_pid" 2>/dev/null || true
+  [[ -z $out_pid ]] || kill -TERM "$out_pid" 2>/dev/null || true
+  [[ -z $err_pid ]] || kill -TERM "$err_pid" 2>/dev/null || true
+  wait 2>/dev/null || true
+  exit 143
+}
+
+trap stop_children TERM INT HUP
+
+if [[ $mode == finite-run ]]; then
+  exec 3> >(finite_cap)
+  out_pid=$!
+  exec 4> >(finite_cap >&2)
+  err_pid=$!
+else
+  exec 3> >(line_cap)
+  out_pid=$!
+  exec 4> >(line_cap >&2)
+  err_pid=$!
+fi
+
+"${command[@]}" >&3 2>&4 &
+child_pid=$!
+exec 3>&- 4>&-
+
+wait "$child_pid"
+status=$?
+child_pid=""
+wait "$out_pid" 2>/dev/null || true
+wait "$err_pid" 2>/dev/null || true
+exit "$status"

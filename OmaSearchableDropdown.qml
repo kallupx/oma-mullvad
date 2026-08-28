@@ -5,7 +5,7 @@ import qs.Ui as Ui
 
 // Local MIT-licensed Omarchy control with corrected trigger-click closing.
 
-// Searchable single-select dropdown. Same trigger shape as Dropdown, but
+// Searchable dropdown. Same trigger shape as Dropdown, but
 // the popup leads with an embedded TextField that filters the option
 // list in real time. Use for pickers with enough options that scanning
 // is friction.
@@ -24,6 +24,8 @@ Item {
   property string label: ""
   property string value: ""
   property var options: []
+  property bool multiple: false
+  property var values: []
   property string placeholderText: "Search..."
   property string emptyText: "No matches"
   property string triggerLabel: ""
@@ -55,6 +57,7 @@ Item {
   function toggle() { popup.opened ? popup.close() : popup.open() }
 
   signal changed(string value)
+  signal selectionChanged(var values)
   signal hovered(bool isHovered)
 
   function optionValue(o) {
@@ -66,7 +69,20 @@ Item {
   function optionDescription(o) {
     return (o && typeof o === "object" && o.description) ? String(o.description) : ""
   }
+  function arrayFrom(v) {
+    var result = []
+    if (!v || typeof v === "string" || typeof v.length !== "number") return result
+    for (var i = 0; i < v.length; i++) result.push(String(v[i]))
+    return result
+  }
+  function isSelected(v) { return arrayFrom(values).indexOf(String(v)) !== -1 }
   function currentLabel() {
+    if (multiple) {
+      var selected = arrayFrom(values)
+      if (selected.length === 0) return ""
+      if (selected.length <= 2) return selected.join(", ")
+      return selected.length + " selected"
+    }
     for (var i = 0; i < options.length; i++) {
       if (optionValue(options[i]) === value) return optionLabel(options[i])
     }
@@ -96,6 +112,7 @@ Item {
     spacing: Style.spacing.labelGap
 
     Text {
+      textFormat: Text.PlainText
       visible: root.showLabel && root.label !== ""
       text: root.label
       color: Qt.darker(root.foreground, 1.4)
@@ -135,6 +152,7 @@ Item {
       }
 
       Text {
+        textFormat: Text.PlainText
         anchors.left: parent.left
         anchors.right: chevron.left
         anchors.verticalCenter: parent.verticalCenter
@@ -148,6 +166,7 @@ Item {
       }
 
       Text {
+        textFormat: Text.PlainText
         id: chevron
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -250,6 +269,7 @@ Item {
             height: popup.height - searchHeader.height - Style.spacing.xxs - 1
 
             Text {
+              textFormat: Text.PlainText
               anchors.centerIn: parent
               visible: resultList.count === 0
               text: root.emptyText
@@ -271,6 +291,14 @@ Item {
               function selectCurrent() {
                 if (currentIndex < 0 || currentIndex >= root.filtered.length) return
                 var v = root.optionValue(root.filtered[currentIndex])
+                if (root.multiple) {
+                  var selected = root.arrayFrom(root.values)
+                  var index = selected.indexOf(v)
+                  if (index === -1) selected.push(v)
+                  else selected.splice(index, 1)
+                  root.selectionChanged(selected)
+                  return
+                }
                 root.value = v
                 root.changed(v)
                 popup.close()
@@ -317,7 +345,9 @@ Item {
                   spacing: Style.spacing.xxs
 
                   Text {
-                    text: root.optionLabel(modelData)
+                    textFormat: Text.PlainText
+                    text: (root.multiple ? (root.isSelected(root.optionValue(modelData)) ? "[x] " : "[ ] ") : "")
+                      + root.optionLabel(modelData)
                     color: index === resultList.currentIndex ? Style.hoverStateColor(root.foreground, root.accent) : root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
@@ -325,6 +355,7 @@ Item {
                     width: parent.width
                   }
                   Text {
+                    textFormat: Text.PlainText
                     visible: text !== ""
                     text: root.optionDescription(modelData)
                     color: Qt.darker(root.foreground, 1.5)

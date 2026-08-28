@@ -41,12 +41,12 @@ Panel {
   readonly property string tunnelHint: service.active ? "Disconnect Mullvad VPN" : "Connect Mullvad VPN"
   readonly property string barTooltip: !service.installed ? "Mullvad CLI is not installed"
     : !service.daemonRunning ? "Mullvad daemon is unavailable"
-    : stateIcon === "error" ? (service.lastError || "Mullvad tunnel error")
+    : stateIcon === "error" ? "Mullvad tunnel error"
     : stateIcon === "warning" ? (service.state === "blocked" ? "Mullvad is blocking network traffic"
       : service.tunnelDropWarning
       ? "Mullvad tunnel dropped unexpectedly"
-      : "Mullvad account credit expires " + (service.accountExpiry || "soon"))
-    : tunnelHint + (service.city ? " · " + service.city + ", " + service.country : "")
+      : "Mullvad account credit expires soon")
+    : tunnelHint
 
   function arrayFrom(value) {
     if (!value || typeof value === "string" || typeof value.length !== "number") return []
@@ -540,7 +540,7 @@ Panel {
         PanelHero {
           id: overviewHero
           width: parent.width
-          title: service.installed ? (service.connected ? (service.city || "Mullvad VPN") : "Mullvad VPN") : "Mullvad unavailable"
+          title: service.installed ? "Mullvad VPN" : "Mullvad unavailable"
           meta: service.installed ? service.statusText : "Install Mullvad VPN 2026.4 to enable this widget"
           foreground: root.foreground
           fontFamily: root.fontFamily
@@ -578,6 +578,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: service.connected && (service.country !== "" || service.ip !== "")
         width: parent.width
         text: "Exit: " + [service.city, service.country, service.hostname, service.ip].filter(function(value) { return String(value || "") !== "" }).join(" · ")
@@ -588,6 +589,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: service.lastError !== ""
         width: parent.width
         text: service.lastError
@@ -606,6 +608,7 @@ Panel {
         radius: Style.cornerRadius
 
         Text {
+          textFormat: Text.PlainText
           id: unavailableText
           anchors.left: parent.left
           anchors.right: parent.right
@@ -649,6 +652,7 @@ Panel {
         radius: Style.cornerRadius
 
         Text {
+          textFormat: Text.PlainText
           id: warningText
           anchors.fill: parent
           anchors.margins: Style.space(10)
@@ -722,6 +726,7 @@ Panel {
         spacing: Style.space(8)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Your account number is sent to mullvad account login over stdin and is never saved by OmaMullvad."
           color: root.dim
@@ -775,6 +780,7 @@ Panel {
           Layout.fillWidth: true
           spacing: Style.space(2)
           Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             text: "Logged in"
             color: root.foreground
@@ -783,6 +789,7 @@ Panel {
             font.bold: true
           }
           Text {
+            textFormat: Text.PlainText
             Layout.fillWidth: true
             text: service.accountExpiry ? "Credit expires " + service.accountExpiry : "Account credit expiry unavailable"
             color: root.dim
@@ -835,6 +842,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Keys: 1–4 pages · T tunnel · R refresh · N/P favourites · H/L pages · J/K scroll"
         color: root.dim
@@ -906,16 +914,18 @@ Panel {
 
         PanelSectionHeader { text: "RELAY FILTERS"; foreground: root.foreground; fontFamily: root.fontFamily }
 
-        MultiSelect {
+        OmaSearchableDropdown {
           width: parent.width
           label: "Providers"
           options: service.providers
+          multiple: true
           values: (service.relayConstraints || {}).providers || []
           enabled: !service.busy
-          noSelectionText: "Any provider"
+          triggerLabel: "Any provider"
+          placeholderText: "Search providers"
           foreground: root.foreground
           fontFamily: root.fontFamily
-          onChanged: function(values) { service.setProviders(values) }
+          onSelectionChanged: function(values) { service.setProviders(values) }
         }
 
         RowLayout {
@@ -982,6 +992,7 @@ Panel {
       PanelSectionHeader { text: "COUNTRIES & CITIES"; foreground: root.foreground; fontFamily: root.fontFamily }
 
       Text {
+        textFormat: Text.PlainText
         visible: locationsColumn.filtered.length === 0
         width: parent.width
         text: service.locations.length === 0 ? "Loading Mullvad relay locations…" : "No locations match your search."
@@ -1019,6 +1030,7 @@ Panel {
       PanelSectionHeader { text: "SELECTED RELAY"; foreground: root.foreground; fontFamily: root.fontFamily }
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: root.selectedLocation
           ? root.selectedLocation.city + ", " + root.selectedLocation.country
@@ -1096,6 +1108,7 @@ Panel {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         text: savedRow.prefix
         color: savedRow.available ? root.foreground : root.urgent
         font.family: root.fontFamily
@@ -1107,6 +1120,7 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.space(1)
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: savedRow.location ? String(savedRow.location.city || savedRow.location.cityCode) + ", " + String(savedRow.location.country || savedRow.location.countryCode) : "Unknown"
           color: root.foreground
@@ -1115,6 +1129,7 @@ Panel {
           elide: Text.ElideRight
         }
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: savedRow.subtitle
           color: savedRow.available ? root.dim : root.urgent
@@ -1160,6 +1175,7 @@ Panel {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         text: "󰖂"
         color: locationRow.selected ? root.foreground : root.dim
         font.family: root.fontFamily
@@ -1171,6 +1187,7 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.space(1)
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: locationRow.location ? String(locationRow.location.city || "Any city") + ", " + String(locationRow.location.country || "") : "Unknown"
           color: root.foreground
@@ -1180,6 +1197,7 @@ Panel {
           elide: Text.ElideRight
         }
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: locationRow.location ? root.locationKey(locationRow.location) + (locationRow.location.servers ? " · " + locationRow.location.servers.length + " relays" : "") : ""
           color: root.dim
@@ -1368,6 +1386,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         width: parent.width
         text: "Apps launched here use mullvad-exclude and remain excluded until their processes exit."
         color: root.dim
@@ -1379,6 +1398,7 @@ Panel {
       PanelSectionHeader { text: "RUNNING OUTSIDE VPN"; foreground: root.foreground; fontFamily: root.fontFamily }
 
       Text {
+        textFormat: Text.PlainText
         visible: service.excludedPids.length === 0
         width: parent.width
         text: "No excluded processes are currently reported."
@@ -1419,6 +1439,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: excludedColumn.apps.length === 0
         width: parent.width
         text: root.bar && root.bar.shell && root.bar.shell.appLibrary
@@ -1445,6 +1466,7 @@ Panel {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: excludedColumn.apps.length >= 30
         width: parent.width
         text: "Showing the first 30 matches. Refine the search to narrow the list."
@@ -1474,6 +1496,7 @@ Panel {
       anchors.rightMargin: Style.space(8)
       spacing: Style.space(8)
       Text {
+        textFormat: Text.PlainText
         text: "󰒃"
         color: root.dim
         font.family: root.fontFamily
@@ -1483,6 +1506,7 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.space(1)
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: pidRow.commandText
           color: root.foreground
@@ -1491,6 +1515,7 @@ Panel {
           elide: Text.ElideMiddle
         }
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: "PID " + pidRow.pidText
           color: root.dim
@@ -1517,8 +1542,8 @@ Panel {
     id: appRow
     property var app: null
     readonly property var library: root.bar && root.bar.shell ? root.bar.shell.appLibrary : null
-    readonly property string appName: library && app ? library.entryName(app) : String(app ? app.name || app.id : "Application")
-    readonly property string appDetail: library && app ? library.entrySubtext(app) : ""
+    readonly property string appName: Model.plainText(library && app ? library.entryName(app) : String(app ? app.name || app.id : "Application"), 128)
+    readonly property string appDetail: Model.plainText(library && app ? library.entrySubtext(app) : "", 256)
 
     foreground: root.foreground
     activeFocusOnTab: true
@@ -1554,6 +1579,7 @@ Panel {
         Layout.fillWidth: true
         spacing: Style.space(1)
         Text {
+          textFormat: Text.PlainText
           Layout.fillWidth: true
           text: appRow.appName
           color: root.foreground
@@ -1562,6 +1588,7 @@ Panel {
           elide: Text.ElideRight
         }
         Text {
+          textFormat: Text.PlainText
           visible: text !== ""
           Layout.fillWidth: true
           text: appRow.appDetail
@@ -1572,6 +1599,7 @@ Panel {
         }
       }
       Text {
+        textFormat: Text.PlainText
         text: "󰍉"
         color: root.dim
         font.family: root.fontFamily
