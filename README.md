@@ -40,6 +40,12 @@ o.bind("SUPER + ALT + V", "Next Mullvad favourite", "omarchy-shell io.github.kal
 o.bind("SUPER + SHIFT + ALT + V", "OmaMullvad panel", "omarchy-shell io.github.kallupx.oma-mullvad toggle")
 ```
 
+## Uninstall
+
+```bash
+omarchy plugin remove io.github.kallupx.oma-mullvad
+```
+
 ## Privacy
 
 Account numbers are sent to `mullvad account login` over standard input and are never stored. OmaMullvad stores only favourites and recent locations; Mullvad remains responsible for VPN settings.
