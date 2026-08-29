@@ -26,6 +26,15 @@ test("command guard enforces deadlines and output limits", () => {
     assert.ok(Date.now() - started < 3000);
 });
 
+test("command guard forwards the caller's stdin to the wrapped command", () => {
+    const input = "1234 1234 1234 1234";
+    assert.equal(input.length, 19);
+    const result = spawnSync(guard, ["finite", "5", "10", "1000", "--", "/usr/bin/cat"], {
+        encoding: "utf8", timeout: 4000, input
+    });
+    assert.equal(result.stdout, input);
+});
+
 test("every local QML Text sink is explicitly plain text", () => {
     const root = join(__dirname, "..");
     for (const file of readdirSync(root).filter(name => name.endsWith(".qml"))) {
