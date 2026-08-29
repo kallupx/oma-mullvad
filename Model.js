@@ -461,7 +461,12 @@ function parseAccount(raw, nowMs) {
 }
 
 function parseToggle(raw) {
-    var matches = boundedInput(raw, 4096).toLowerCase().match(/\b(on|off|enabled|disabled|allow|block|true|false|yes|no)\b/g);
+    // Anchor to the first "key:" line so a trailing CLI hint cannot flip the result.
+    var input = boundedInput(raw, 4096);
+    var lineMatch = input.match(/^[^:\n]*:\s*(on|off|enabled|disabled|allow|block|true|false|yes|no)\b/im);
+    if (lineMatch)
+        return /^(on|enabled|allow|true|yes)$/i.test(lineMatch[1]);
+    var matches = input.toLowerCase().match(/\b(on|off|enabled|disabled|allow|block|true|false|yes|no)\b/g);
     if (!matches || !matches.length)
         return null;
     return /^(on|enabled|allow|true|yes)$/.test(matches[matches.length - 1]);
