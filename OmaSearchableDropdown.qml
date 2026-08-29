@@ -299,7 +299,6 @@ Item {
                   root.selectionChanged(selected)
                   return
                 }
-                root.value = v
                 root.changed(v)
                 popup.close()
               }
