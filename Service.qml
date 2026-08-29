@@ -54,6 +54,11 @@ Item {
   property string lastError: ""
   property var _readQueue: []
   property string _readKind: ""
+  // Per-source sequence captured at start: _applyStatus ignores results older
+  // than the last applied, so a slow poll never clobbers a newer listener event.
+  property int _statusSeq: 0
+  property int _statusApplySeq: 0
+  property int _pendingStatusSeq: 0
   property var _readLines: []
   property var _readErrorLines: []
   property int _readOutputLines: 0
@@ -140,6 +145,7 @@ Item {
     var request = queue.shift()
     _readQueue = queue
     _readKind = request.kind
+    if (request.kind === "status") root._pendingStatusSeq = ++root._statusSeq
     _resetReadOutput()
     readProcess.command = _finiteCommand(request.command, 10)
     readProcess.running = true
@@ -167,7 +173,8 @@ Item {
     else refreshAll()
   }
 
-  function _applyStatus(raw) {
+  function _applyStatus(raw, seq) {
+    if (seq !== undefined && seq < root._statusApplySeq) return
     var parsed = Model.parseStatus(raw)
     state = String(parsed.state || "unknown")
     connected = parsed.connected === true
@@ -187,6 +194,7 @@ Item {
     else if (state === "disconnected") statusText = "Disconnected"
     else if (state === "error") statusText = "Tunnel error"
     else statusText = state ? state.charAt(0).toUpperCase() + state.slice(1) : "Unknown"
+    if (seq !== undefined) root._statusApplySeq = seq
   }
 
   function _updateCurrentCodes() {
@@ -230,6 +238,7 @@ Item {
     var combined = String(raw || "") + "\n" + String(error || "")
     if (kind === "status") {
       if (exitCode !== 0) {
+        if (root._pendingStatusSeq < root._statusApplySeq) return
         daemonRunning = false
         connected = false
         state = "unavailable"
@@ -240,7 +249,7 @@ Item {
         return
       }
       try {
-        _applyStatus(raw)
+        _applyStatus(raw, root._pendingStatusSeq)
         if (lastError.indexOf("Mullvad daemon unavailable") === 0) lastError = ""
         _ensureListener()
       } catch (e) {
@@ -576,9 +585,9 @@ Item {
     stdout: SplitParser {
       onRead: function(line) {
         var boundedLine = String(line || "").slice(0, root.listenerLineChars)
-        if (!boundedLine.trim()) return
+        if (!boundedLine.trim() || !Model.isTunnelStateEvent(boundedLine)) return
         try {
-          root._applyStatus(boundedLine)
+          root._applyStatus(boundedLine, ++root._statusSeq)
         } catch (e) {
           root.lastError = root._shortError(e, "Could not parse live Mullvad status")
         }
