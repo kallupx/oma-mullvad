@@ -601,7 +601,8 @@ function validateDnsAddress(value) {
 
 function safeArg(value, label) {
     var result = text(value);
-    if (!result || result.length > 512 || /[\x00\r\n]/.test(result))
+    // A leading "-" would be read as a flag by the receiving binary.
+    if (!result || result.length > 512 || /[\x00\r\n]/.test(result) || /^-/.test(result))
         throw new Error("Invalid " + label);
     return result;
 }

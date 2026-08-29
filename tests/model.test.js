@@ -243,6 +243,9 @@ test("argv builder covers tunnel, relay, anti-censorship, and exclusions", () =>
     assert.throws(() => Model.argv("location", { country: "se;reboot" }), /country/);
     assert.throws(() => Model.argv("antiCensorshipPort", { mode: "udp2tcp", port: 70000 }), /port/);
     assert.throws(() => Model.argv("launchExcluded", { desktopId: "x; reboot" }), /application/);
+
+    assert.throws(() => Model.argv("providers", { providers: ["-x"] }), /provider/);
+    assert.throws(() => Model.argv("launchExcluded", { desktopId: "-firefox" }), /application/);
 });
 
 test("redaction removes account and token-like secrets", () => {
