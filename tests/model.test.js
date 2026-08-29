@@ -186,6 +186,13 @@ lwo settings: any port`);
         { pid: 1234, command: "/usr/bin/firefox" },
         { pid: 5678, command: "/opt/App/app --flag" }
     ]);
+
+    assert.deepEqual(Model.parseExcludedPids(`Excluded PIDs:
+  1234
+  5678`), [
+        { pid: 1234, command: "" },
+        { pid: 5678, command: "" }
+    ]);
 });
 
 test("trust-boundary validation accepts useful values and rejects malformed input", () => {
