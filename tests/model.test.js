@@ -152,6 +152,8 @@ test("toggles and DNS getter/default/custom commands round-trip supported settin
     assert.equal(Model.parseToggle("Local network sharing: block"), false);
     assert.equal(Model.parseToggle("unknown"), null);
 
+    assert.equal(Model.parseToggle("Lockdown mode: on\nSet with: mullvad lockdown-mode set off"), true);
+
     const dns = Model.parseDns(`Custom DNS: yes
 Servers: 1.1.1.1, 2606:4700:4700::1111
 Block ads: false
