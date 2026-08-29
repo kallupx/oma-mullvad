@@ -43,6 +43,8 @@ test("status JSON and listen events normalize connection details", () => {
     const failed = Model.parseStatus({ state: "error", details: { error: `token=${tokenValue} account ${accountNumber}` } });
     assert.ok(!failed.error.includes(tokenValue));
     assert.ok(!failed.error.includes(accountNumber));
+
+    assert.equal(Model.parseStatus({ state: "connected", details: {} }).lockedDown, undefined);
 });
 
 const relayOutput = `Sweden (se)

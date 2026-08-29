@@ -117,7 +117,9 @@ function parseStatus(raw) {
             entryHostname: validateHostname(entryHostname) ? entryHostname : "",
             mullvadExitIp: location.mullvad_exit_ip === true
         },
-        lockedDown: details.locked_down === true || value.locked_down === true
+        // `locked_down` exists only in the `disconnected` variant; undefined otherwise.
+        lockedDown: typeof details.locked_down === "boolean" ? details.locked_down
+            : typeof value.locked_down === "boolean" ? value.locked_down : undefined
     };
 }
 
