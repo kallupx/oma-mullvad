@@ -531,10 +531,13 @@ function parseExcludedPids(raw) {
     var result = [];
     var lines = boundedLines(raw, MAX_INPUT_LINES, MAX_INPUT_CHARS);
     for (var i = 0; i < lines.length && result.length < MAX_EXCLUDED_PIDS; ++i) {
-        var match = lines[i].match(/^\s*(\d+)\s*(?::|\s)\s*(.*?)\s*$/);
-        var pid = match ? Number(match[1]) : 0;
-        if (match && pid >= 1 && pid <= 2147483647)
-            result.push({ pid: pid, command: plainText(match[2], 512) });
+        var line = lines[i];
+        var match = line.match(/^\s*(\d+)\s*(?::|\s)\s*(.*?)\s*$/);
+        // The CLI prints bare PIDs, one per line, with no command text.
+        var bare = !match && line.match(/^\s*(\d+)\s*$/);
+        var pid = match ? Number(match[1]) : bare ? Number(bare[1]) : 0;
+        if ((match || bare) && pid >= 1 && pid <= 2147483647)
+            result.push({ pid: pid, command: match ? plainText(match[2], 512) : "" });
     }
     return result;
 }
