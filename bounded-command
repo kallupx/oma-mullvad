@@ -90,9 +90,12 @@ else
   err_pid=$!
 fi
 
-"${command[@]}" >&3 2>&4 &
+# A backgrounded command without job control gets /dev/null as stdin;
+# keep the caller's stdin on fd 5 and hand it to the child explicitly.
+exec 5<&0
+"${command[@]}" <&5 >&3 2>&4 &
 child_pid=$!
-exec 3>&- 4>&-
+exec 3>&- 4>&- 5<&-
 
 wait "$child_pid"
 status=$?
