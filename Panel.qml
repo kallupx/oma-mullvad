@@ -1331,7 +1331,6 @@ Panel {
         foreground: root.foreground
         fontFamily: root.fontFamily
         onChanged: function(value) {
-          advancedColumn.selectedAntiMode = value
           service.setAntiCensorshipMode(value)
         }
       }
