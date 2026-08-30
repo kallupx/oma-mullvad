@@ -294,3 +294,22 @@ test("external records and fields are bounded before reaching QML models", () =>
     const dns = Model.parseDns("Servers: " + Array.from({ length: 20 }, (_, i) => `192.0.2.${i + 1}`).join(", "));
     assert.equal(dns.customServers.length, 16);
 });
+
+test("listener sequence only advances on tunnel-state events", () => {
+    const tunnel = '{"state":"connected","details":{"location":{"hostname":"se-got-wg-001"}}}';
+    const settings = '{"settings":{"relay_settings":{"normal":{}}}}';
+    const relayList = '{"relay_list":{"countries":[]}}';
+    assert.equal(Model.isTunnelStateEvent(tunnel), true);
+    assert.equal(Model.isTunnelStateEvent('{"tunnel_state":' + tunnel + '}'), true);
+    assert.equal(Model.isTunnelStateEvent(settings), false);
+    assert.equal(Model.isTunnelStateEvent(relayList), false);
+    assert.equal(Model.isTunnelStateEvent("not json"), false);
+
+    // A settings event arriving before a slow poll finishes must not outrank the poll.
+    let seq = 0, applied = 0;
+    const pollSeq = ++seq;
+    if (Model.isTunnelStateEvent(settings)) applied = ++seq;
+    assert.ok(pollSeq >= applied, "settings event must not advance the sequence");
+    if (Model.isTunnelStateEvent(tunnel)) applied = ++seq;
+    assert.ok(pollSeq < applied, "a real tunnel-state event outranks the slow poll");
+});

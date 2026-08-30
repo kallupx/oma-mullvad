@@ -82,6 +82,17 @@ function statusPayload(value) {
     return value;
 }
 
+var TUNNEL_STATES = ["connected", "connecting", "disconnecting", "disconnected", "error", "blocked"];
+
+// `status --json listen` also emits settings, relay-list, device, version,
+// access-method and leak events; only a tunnel-state line carries a state.
+function isTunnelStateEvent(raw) {
+    var values = parseJsonLines(raw);
+    if (!values.length) return false;
+    var state = text(statusPayload(values[values.length - 1]).state || "").toLowerCase();
+    return TUNNEL_STATES.indexOf(state) !== -1;
+}
+
 function parseStatus(raw) {
     var values = parseJsonLines(raw);
     var value = statusPayload(values.length ? values[values.length - 1] : {});
@@ -89,7 +100,7 @@ function parseStatus(raw) {
     var details = rawDetails && typeof rawDetails === "object" ? rawDetails : {};
     var location = details.location || value.location || {};
     var state = text(value.state || "unknown").toLowerCase();
-    if (["connected", "connecting", "disconnecting", "disconnected", "error", "blocked"].indexOf(state) === -1)
+    if (TUNNEL_STATES.indexOf(state) === -1)
         state = "unknown";
     var errorValue = details.error || value.error || "";
     var hostname = plainText(location.hostname || details.hostname, 253).toLowerCase();
@@ -745,6 +756,7 @@ var api = {
     redact: redact,
     plainText: plainText,
     parseStatus: parseStatus,
+    isTunnelStateEvent: isTunnelStateEvent,
     parseRelayList: parseRelayList,
     filterServers: filterServers,
     filterLocations: filterLocations,
