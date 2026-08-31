@@ -602,6 +602,29 @@ Panel {
       }
 
       BorderSurface {
+        visible: service.installed && !service.cliVersionSupported
+        width: parent.width
+        implicitHeight: versionWarningText.implicitHeight + Style.space(20)
+        color: Util.alpha(root.urgent, 0.10)
+        borderSpec: Border.flat(root.urgent, Style.normalBorderWidth)
+        radius: Style.cornerRadius
+
+        Text {
+          id: versionWarningText
+          textFormat: Text.PlainText
+          anchors.fill: parent
+          anchors.margins: Style.space(10)
+          text: service.cliVersion !== ""
+            ? "Mullvad CLI " + service.cliVersion + " is untested with this plugin; some settings may display incorrectly."
+            : "The Mullvad CLI version could not be identified; some settings may display incorrectly."
+          color: root.urgent
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          wrapMode: Text.WordWrap
+        }
+      }
+
+      BorderSurface {
         visible: service.tunnelDropWarning || (service.loggedIn && service.accountDaysRemaining >= 0 && service.accountDaysRemaining <= 7)
         width: parent.width
         implicitHeight: warningText.implicitHeight + Style.space(20)

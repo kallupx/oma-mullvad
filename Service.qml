@@ -14,6 +14,8 @@ Item {
   readonly property int listenerLineChars: 8192
 
   property bool installed: false
+  property string cliVersion: ""
+  readonly property bool cliVersionSupported: Model.isCliVersionSupported(cliVersion)
   property bool daemonRunning: false
   property bool loggedIn: false
   property bool connected: false
@@ -221,6 +223,7 @@ Item {
   function _applyRead(kind, raw, error, exitCode) {
     if (kind === "probe") {
       installed = exitCode === 0
+      cliVersion = installed ? Model.parseCliVersion(raw) : ""
       if (!installed) {
         daemonRunning = false
         connected = false
