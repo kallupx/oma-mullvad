@@ -28,6 +28,7 @@ Panel {
   property var pendingConfirmation: null
   property bool syncingSettings: false
   readonly property bool cliReady: service.installed && service.daemonRunning
+  readonly property var _probePageItem: pageLoader.item
 
   function pageAvailable(index) { return index === 0 || cliReady }
 
@@ -277,10 +278,30 @@ Panel {
     return result
   }
 
+  function excludedApps() {
+    if (!bar || !bar.shell || !bar.shell.appLibrary) return []
+    var library = bar.shell.appLibrary
+    var source = library.sortedEntries("")
+    var result = []
+    for (var i = 0; i < source.length; i++) {
+      var entry = source[i].entry || source[i]
+      if (!entry) continue
+      var firstWord = String(entry.execString || "").trim().split(/\s+/)[0] || ""
+      var execBase = firstWord.split("/").pop()
+      if (execBase) result.push({ name: Model.plainText(library.entryName(entry), 128), execBase: execBase })
+    }
+    return result
+  }
+
+  function excludedGroups() {
+    return Model.groupExcludedProcesses(arrayFrom(service.excludedProcesses), excludedApps())
+  }
+
   function showPage(index) {
     var target = Math.max(0, Math.min(3, index))
     if (!pageAvailable(target)) return
     pageIndex = target
+    if (target === 3) service.refreshExcluded()
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
@@ -349,6 +370,13 @@ Panel {
   }
   Component.onCompleted: syncInlineSettings()
 
+  Timer {
+    interval: 5000
+    running: root.opened && root.pageIndex === 3
+    repeat: true
+    onTriggered: service.refreshExcluded()
+  }
+
   IpcHandler {
     target: root.ipcTarget
     function open(): void { root.open() }
@@ -361,6 +389,7 @@ Panel {
     function connect(): string { service.connectTunnel(); return "ok" }
     function disconnect(): string { service.disconnectTunnel(); return "ok" }
     function toggleTunnel(): string { service.toggleTunnel(); return "ok" }
+    function excluded(): string { return JSON.stringify(root.excludedGroups()) }
     function nextFavorite(): string { return root.cycleFavorite(1) }
     function previousFavorite(): string { return root.cycleFavorite(-1) }
     function favorite(index: string): string { return root.chooseFavorite(index) }
@@ -1376,13 +1405,14 @@ Panel {
       width: pageFlick.width
       spacing: Style.space(12)
       property var apps: root.appRows()
+      property var groups: root.excludedGroups()
       Keys.onEscapePressed: root.close()
 
       PanelHero {
         width: parent.width
         title: "Excluded applications"
         meta: "Launch outside the Mullvad tunnel"
-        detail: String(service.excludedPids.length)
+        detail: String(excludedColumn.groups.length)
         foreground: root.foreground
         fontFamily: root.fontFamily
         iconComponent: Component {
@@ -1404,7 +1434,7 @@ Panel {
 
       Text {
         textFormat: Text.PlainText
-        visible: service.excludedPids.length === 0
+        visible: excludedColumn.groups.length === 0
         width: parent.width
         text: "No excluded processes are currently reported."
         color: root.dim
@@ -1414,15 +1444,15 @@ Panel {
       }
 
       Column {
-        visible: service.excludedPids.length > 0
+        visible: excludedColumn.groups.length > 0
         width: parent.width
         spacing: Style.space(5)
         Repeater {
-          model: service.excludedPids
-          ExcludedPidRow {
+          model: excludedColumn.groups
+          ExcludedGroupRow {
             required property var modelData
             width: parent.width
-            process: modelData
+            group: modelData
           }
         }
       }
@@ -1483,17 +1513,19 @@ Panel {
     }
   }
 
-  component ExcludedPidRow: CursorSurface {
-    id: pidRow
-    property var process: null
-    readonly property string pidText: String(process && process.pid !== undefined ? process.pid : process || "")
-    readonly property string commandText: String(process && (process.command || process.name) ? (process.command || process.name) : "Excluded process")
+  component ExcludedGroupRow: CursorSurface {
+    id: groupRow
+    property var group: null
+    readonly property string labelText: Model.plainText(group && group.label ? group.label : "Excluded process", 128)
+    readonly property int procCount: group && group.count ? group.count : 0
+    readonly property string rootPidText: String(group && group.rootPid !== undefined ? group.rootPid : "")
+    readonly property var pids: (group && group.pids) || []
 
     foreground: root.foreground
-    implicitHeight: pidContent.implicitHeight + Style.space(12)
+    implicitHeight: groupContent.implicitHeight + Style.space(12)
 
     RowLayout {
-      id: pidContent
+      id: groupContent
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -1513,7 +1545,7 @@ Panel {
         Text {
           textFormat: Text.PlainText
           Layout.fillWidth: true
-          text: pidRow.commandText
+          text: groupRow.labelText
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -1522,7 +1554,7 @@ Panel {
         Text {
           textFormat: Text.PlainText
           Layout.fillWidth: true
-          text: "PID " + pidRow.pidText
+          text: groupRow.procCount + (groupRow.procCount === 1 ? " process" : " processes") + " · PID " + groupRow.rootPidText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -1530,14 +1562,14 @@ Panel {
       }
       PanelActionButton {
         iconText: "󰅖"
-        tooltipText: "Remove PID from split tunneling"
+        tooltipText: "Stop excluding " + groupRow.labelText
         foreground: root.foreground
         hoverColor: root.urgent
         fontFamily: root.fontFamily
         focusable: true
-        enabled: !service.busy && pidRow.pidText !== ""
-        onClicked: root.confirmAction("Stop excluding PID " + pidRow.pidText + " from the Mullvad tunnel?", function() {
-          service.removeExcludedPid(pidRow.pidText)
+        enabled: !service.busy && groupRow.pids.length > 0
+        onClicked: root.confirmAction("Stop excluding " + groupRow.labelText + " (" + groupRow.procCount + " processes)?", function() {
+          service.removeExcludedPids(groupRow.pids)
         })
       }
     }

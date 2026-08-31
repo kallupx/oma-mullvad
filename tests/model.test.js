@@ -210,6 +210,39 @@ lwo settings: any port`);
     ]);
 });
 
+test("process-table parsing groups one application launch into one row", () => {
+    const procs = Model.parseProcessTable([
+        "1197192 1626 app-org.chromium.Chromium-1197192.scope chromium",
+        "1197196 1626 app-Hyprland-gtk\\x2dlaunch.scope chrome_crashpad",
+        "1197202 1197192 app-Hyprland-gtk\\x2dlaunch.scope chromium",
+        "1197210 1197192 app-Hyprland-gtk\\x2dlaunch.scope chromium"
+    ].join("\n"));
+    assert.equal(procs.length, 4);
+    assert.deepEqual(procs[0], { pid: 1197192, ppid: 1626,
+        unit: "app-org.chromium.Chromium-1197192.scope", comm: "chromium" });
+
+    const groups = Model.groupExcludedProcesses(procs, [{ name: "Chromium", execBase: "chromium" }]);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].count, 4);
+    assert.equal(groups[0].rootPid, 1197192);
+    assert.equal(groups[0].label, "Chromium");
+    assert.deepEqual(groups[0].pids, [1197192, 1197196, 1197202, 1197210]);
+
+    assert.equal(Model.groupExcludedProcesses(procs.concat([
+        { pid: 2000000, ppid: 1, unit: "", comm: "other" }
+    ]), []).length, 2);
+});
+
+test("excluded-process grouping follows parent links without a user unit", () => {
+    const groups = Model.groupExcludedProcesses([
+        { pid: 5000, ppid: 1, unit: "", comm: "foo" },
+        { pid: 5001, ppid: 5000, unit: "", comm: "foo-helper" }
+    ], []);
+    assert.equal(groups.length, 1);
+    assert.equal(groups[0].rootPid, 5000);
+    assert.deepEqual(groups[0].pids, [5000, 5001]);
+});
+
 test("trust-boundary validation accepts useful values and rejects malformed input", () => {
     assert.equal(Model.validatePort(53), true);
     assert.equal(Model.validatePort(0), false);

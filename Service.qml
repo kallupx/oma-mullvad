@@ -52,6 +52,8 @@ Item {
   })
   property var antiCensorship: ({ mode: "auto", port: "any" })
   property var excludedPids: []
+  property var excludedProcesses: []
+  readonly property int excludedGroupCount: Model.groupExcludedProcesses(excludedProcesses, []).length
 
   property string actionStatus: ""
   property string lastError: ""
@@ -355,6 +357,11 @@ Item {
         }
       } else if (kind === "excludedPids") {
         excludedPids = Model.parseExcludedPids(raw)
+        var pidCsv = _excludedPidsCsv(excludedPids)
+        if (pidCsv) _enqueueRead("excludedProcs", ["ps", "-o", "pid=,ppid=,uunit=,comm=", "-p", pidCsv])
+        else excludedProcesses = []
+      } else if (kind === "excludedProcs") {
+        excludedProcesses = Model.parseProcessTable(raw)
       }
     } catch (e) {
       lastError = _shortError(e, "Could not parse Mullvad " + kind)
@@ -381,18 +388,27 @@ Item {
     }
   }
 
-  function _enqueueAction(command, label) {
+  function _excludedPidsCsv(procs) {
+    var pids = []
+    for (var i = 0; i < (procs || []).length && pids.length < 256; i++) {
+      var pid = Number(procs[i].pid)
+      if (pid >= 1 && pid <= 2147483647 && Math.floor(pid) === pid) pids.push(String(pid))
+    }
+    return pids.join(",")
+  }
+
+  function _enqueueAction(command, label, opts) {
     if (!command || command.length === 0) return false
-    _actionQueue = _actionQueue.concat([{ command: command, label: label }])
+    _actionQueue = _actionQueue.concat([{ command: command, label: label, quiet: !!(opts && opts.quiet) }])
     _startNextAction()
     return true
   }
 
-  function _runAction(action, params, label) {
-    return _enqueueAction(_command(action, params), label)
+  function _runAction(action, params, label, opts) {
+    return _enqueueAction(_command(action, params), label, opts)
   }
 
-  function _armAction(command, label, secret) {
+  function _armAction(command, label, secret, quiet) {
     actionStatusTimer.stop()
     _resetActionOutput()
     _actionGen++
@@ -401,6 +417,7 @@ Item {
     actionProcess.stdinEnabled = true
     actionProcess.label = label
     actionProcess.secret = secret || ""
+    actionProcess.quiet = !!quiet
     actionProcess.command = command
     actionStatus = label + "…"
     actionProcess.running = true
@@ -411,7 +428,7 @@ Item {
     var queue = _actionQueue.slice(0)
     var action = queue.shift()
     _actionQueue = queue
-    _armAction(action.command, action.label, "")
+    _armAction(action.command, action.label, "", action.quiet)
   }
 
   function connectTunnel() {
@@ -545,10 +562,22 @@ Item {
     actionStatus = "Launched outside the VPN"
     actionStatusTimer.restart()
     excludedRefresh.restart()
+    excludedRefresh4s.restart()
   }
 
-  function removeExcludedPid(pid) {
-    _runAction("excludedPidDelete", { pid: pid }, "Removing excluded process")
+  function refreshExcluded() {
+    if (installed) _enqueueRead("excludedPids", ["mullvad", "split-tunnel", "list"])
+  }
+
+  function removeExcludedPids(pids) {
+    var list = []
+    var input = Array.isArray(pids) ? pids : []
+    for (var i = 0; i < input.length && list.length < 256; i++) {
+      var pid = Number(input[i])
+      if (pid >= 1 && pid <= 2147483647 && Math.floor(pid) === pid) list.push(pid)
+    }
+    for (var j = 0; j < list.length; j++)
+      _runAction("excludedPidDelete", { pid: list[j] }, "Removing excluded process", { quiet: j < list.length - 1 })
   }
 
   Timer {
@@ -577,7 +606,14 @@ Item {
     id: excludedRefresh
     interval: 1000
     repeat: false
-    onTriggered: root._enqueueRead("excludedPids", ["mullvad", "split-tunnel", "list"])
+    onTriggered: root.refreshExcluded()
+  }
+
+  Timer {
+    id: excludedRefresh4s
+    interval: 4000
+    repeat: false
+    onTriggered: root.refreshExcluded()
   }
 
   Timer {
@@ -704,6 +740,8 @@ Item {
     actionKillTimer.stop()
     actionProcess.secret = ""
     var label = actionProcess.label
+    var quiet = actionProcess.quiet
+    actionProcess.quiet = false
     var success = false
     if (startError) {
       root.lastError = root._shortError(startError, label + " failed")
@@ -733,7 +771,7 @@ Item {
         success = true
       }
     }
-    root.refreshAll()
+    if (!(quiet && root._actionQueue.length > 0)) root.refreshAll()
     if (success) Qt.callLater(root._startNextAction)
   }
 
@@ -741,6 +779,7 @@ Item {
     id: actionProcess
     property string label: ""
     property string secret: ""
+    property bool quiet: false
     command: []
     running: false
     stdinEnabled: true

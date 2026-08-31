@@ -117,6 +117,8 @@ ShellRoot {
       cliVersionSupported: service.cliVersionSupported,
       daemonRunning: service.daemonRunning,
       locations: service.locations.length,
+      excludedProcessesLength: service.excludedProcesses.length,
+      excludedGroupCount: service.excludedGroupCount,
       lastError: service.lastError,
       actionStatus: service.actionStatus,
       readWatchdogs: service._readWatchdogFiredCount,

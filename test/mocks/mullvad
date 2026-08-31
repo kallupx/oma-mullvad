@@ -60,7 +60,7 @@ case "$*" in
   "lan get") echo "Local network sharing setting: block" ;;
   "dns get") printf 'Custom DNS: no\nBlock ads: false\nBlock trackers: false\nBlock malware: false\n' ;;
   "anti-censorship get") printf 'mode: auto\nudp2tcp settings: any port\n' ;;
-  "split-tunnel list") echo "Excluded PIDs:" ;;
+  "split-tunnel list") awk '{ print $1 }' "$fixtures/ps-table.txt" ;;
   connect|disconnect) echo ok ;;
   *) echo "unhandled mock invocation: $*" >&2; exit 2 ;;
 esac

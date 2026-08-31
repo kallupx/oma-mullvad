@@ -571,6 +571,99 @@ function parseExcludedPids(raw) {
     return result;
 }
 
+function parseProcessTable(raw) {
+    var result = [];
+    var lines = boundedLines(raw, MAX_INPUT_LINES, MAX_INPUT_CHARS);
+    for (var i = 0; i < lines.length && result.length < MAX_EXCLUDED_PIDS; ++i) {
+        var fields = lines[i].trim().split(/\s+/);
+        if (fields.length < 4 || !/^\d+$/.test(fields[0]) || !/^\d+$/.test(fields[1])) continue;
+        var pid = Number(fields[0]);
+        var ppid = Number(fields[1]);
+        if (pid < 1 || pid > 2147483647 || ppid < 0 || ppid > 2147483647) continue;
+        result.push({ pid: pid, ppid: ppid,
+            unit: fields[2] === "-" ? "" : plainText(fields[2], 128),
+            comm: plainText(fields.slice(3).join(" "), 64) });
+    }
+    return result;
+}
+
+function _findGroupRoot(parent, index) {
+    while (parent[index] !== index) {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+    }
+    return index;
+}
+
+function _unionGroups(parent, a, b) {
+    var rootA = _findGroupRoot(parent, a);
+    var rootB = _findGroupRoot(parent, b);
+    if (rootA !== rootB) parent[rootA] = rootB;
+}
+
+function _groupRootPid(members, procs, pidIndex) {
+    var candidates = [];
+    for (var i = 0; i < members.length; ++i) {
+        var proc = procs[members[i]];
+        if (!pidIndex.hasOwnProperty(String(proc.ppid))) candidates.push(proc.pid);
+    }
+    if (!candidates.length) candidates = members.map(function(index) { return procs[index].pid; });
+    return Math.min.apply(null, candidates);
+}
+
+function _groupLabel(members, procs, apps, rootPid) {
+    for (var a = 0; a < apps.length; ++a) {
+        var execBase = text(apps[a] && apps[a].execBase).toLowerCase();
+        if (!execBase) continue;
+        for (var i = 0; i < members.length; ++i) {
+            var comm = text(procs[members[i]].comm).toLowerCase();
+            if (comm === execBase || comm.indexOf(execBase) === 0)
+                return plainText(apps[a].name, 128) || comm;
+        }
+    }
+    for (var j = 0; j < members.length; ++j) {
+        if (procs[members[j]].pid === rootPid)
+            return plainText(procs[members[j]].comm, 128) || "Excluded process";
+    }
+    return "Excluded process";
+}
+
+// Parent links and identical non-empty user units both identify processes
+// spawned by the same excluded application launch.
+function groupExcludedProcesses(procs, apps) {
+    procs = Array.isArray(procs) ? procs : [];
+    apps = Array.isArray(apps) ? apps : [];
+    var parent = [];
+    var pidIndex = {};
+    var i;
+    for (i = 0; i < procs.length; ++i) { parent.push(i); pidIndex[String(procs[i].pid)] = i; }
+    for (i = 0; i < procs.length; ++i) {
+        var parentIndex = pidIndex[String(procs[i].ppid)];
+        if (parentIndex !== undefined && parentIndex !== i) _unionGroups(parent, i, parentIndex);
+    }
+    for (i = 0; i < procs.length; ++i) {
+        if (!procs[i].unit) continue;
+        for (var j = i + 1; j < procs.length; ++j)
+            if (procs[j].unit && procs[i].unit === procs[j].unit) _unionGroups(parent, i, j);
+    }
+    var byRoot = {};
+    for (i = 0; i < procs.length; ++i) {
+        var root = _findGroupRoot(parent, i);
+        if (!byRoot[root]) byRoot[root] = [];
+        byRoot[root].push(i);
+    }
+    var result = [];
+    Object.keys(byRoot).forEach(function(rootKey) {
+        var members = byRoot[rootKey];
+        var pids = members.map(function(index) { return procs[index].pid; }).sort(function(a, b) { return a - b; });
+        var rootPid = _groupRootPid(members, procs, pidIndex);
+        result.push({ key: String(rootPid), label: _groupLabel(members, procs, apps, rootPid),
+            pids: pids, rootPid: rootPid, count: pids.length });
+    });
+    result.sort(function(a, b) { return a.rootPid - b.rootPid; });
+    return result;
+}
+
 function validatePort(value) {
     if (!/^\d+$/.test(text(value)))
         return false;
@@ -786,6 +879,8 @@ var api = {
     parseDns: parseDns,
     parseAntiCensorship: parseAntiCensorship,
     parseExcludedPids: parseExcludedPids,
+    parseProcessTable: parseProcessTable,
+    groupExcludedProcesses: groupExcludedProcesses,
     validatePort: validatePort,
     validateFavoriteIndex: validateFavoriteIndex,
     validateDnsAddress: validateDnsAddress,

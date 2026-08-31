@@ -135,6 +135,23 @@ ShellRoot {
         selectedPage: panel.pageIndex,
         barTooltip: widget.barTooltip
       })
+    } else if (scenario === "excluded-groups") {
+      var excludedPanel = widget._probePanelItem
+      service.installed = true
+      service.daemonRunning = true
+      excludedPanel.showPage(3)
+      Qt.callLater(function() {
+        var groups = excludedPanel.excludedGroups()
+        root.finish("", {
+          selectedPage: excludedPanel.pageIndex,
+          processCount: service.excludedProcesses.length,
+          groupCount: groups.length,
+          firstLabel: groups.length ? groups[0].label : "",
+          firstCount: groups.length ? groups[0].count : 0,
+          pageLoaded: excludedPanel._probePageItem !== null,
+          pageGroupCount: excludedPanel._probePageItem ? excludedPanel._probePageItem.groups.length : -1
+        })
+      })
     } else finish("unknown scenario")
   }
 

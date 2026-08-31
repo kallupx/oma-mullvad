@@ -28,6 +28,7 @@ run_case() {
   [[ "$scenario" == status-race ]] && listen_script="$plugin_dir/test/fixtures/listen-race.txt"
   mkdir -p "$path_dir"
   ln -s "$plugin_dir/test/mocks/mullvad" "$path_dir/mullvad"
+  ln -s "$plugin_dir/test/mocks/ps" "$path_dir/ps"
   : > "$scratch/$name.mock"
   MULLVAD_MOCK_MODE="$mode" MULLVAD_MOCK_LOG="$scratch/$name.mock" \
     MULLVAD_MOCK_LISTEN_SCRIPT="$listen_script" \
@@ -55,6 +56,8 @@ check "[[ -n '$json' ]]" "ok probe completes"
 check "[[ \"$(field "$json" installed)\" == true && \"$(field "$json" daemonRunning)\" == true ]]" "reads populate service state"
 check "[[ \"$(field "$json" cliVersion)\" == 2026.4 && \"$(field "$json" cliVersionSupported)\" == true ]]" "direct probe preserves CLI-version support state"
 check "[[ \"$(field "$json" locations)\" -gt 0 ]]" "relay data parses"
+check "[[ \"$(field "$json" excludedProcessesLength)\" -eq 14 ]]" "excluded process details resolve"
+check "[[ \"$(field "$json" excludedGroupCount)\" -eq 1 ]]" "one app launch folds into one group"
 check "grep -q 'login-received-len=16' '$scratch/ok.mock'" "login stdin reaches direct child"
 check_orphans ok
 
