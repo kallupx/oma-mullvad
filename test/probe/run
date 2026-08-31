@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+plugin_dir="$(cd "$probe_dir/../.." && pwd)"
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+failures=0
+
+if ! command -v qs >/dev/null 2>&1; then
+  echo "mock Process probe skipped: qs is unavailable"
+  exit 0
+fi
+
+field() {
+  node -e 'const v=JSON.parse(process.argv[1])[process.argv[2]]; process.stdout.write(v == null ? "" : String(v))' "$1" "$2"
+}
+
+check() {
+  if eval "$1"; then printf 'ok - %s\n' "$2"; else printf 'not ok - %s\n' "$2"; failures=$((failures + 1)); fi
+}
+
+run_case() {
+  local name="$1" mode="$2" scenario="$3"
+  local path_dir="$scratch/$name-bin"
+  mkdir -p "$path_dir"
+  ln -s "$plugin_dir/test/mocks/mullvad" "$path_dir/mullvad"
+  : > "$scratch/$name.mock"
+  MULLVAD_MOCK_MODE="$mode" MULLVAD_MOCK_LOG="$scratch/$name.mock" \
+    MULLVAD_PROBE_SCENARIO="$scenario" MULLVAD_PLUGIN_DIR="$plugin_dir" \
+    PATH="$path_dir:$PATH" timeout 20 qs -n -p "$probe_dir/service-probe.qml" \
+    > "$scratch/$name.log" 2>&1
+  grep -o 'PROBE_RESULT .*' "$scratch/$name.log" | tail -n1 | sed 's/^PROBE_RESULT //'
+}
+
+check_orphans() {
+  local name="$1" leaked=0
+  while read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      state="$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null)"
+      if [[ "$state" != Z ]]; then leaked=1; kill -9 "$pid" 2>/dev/null || true; fi
+    fi
+  done < <(sed -n 's/^PID=\([0-9]*\).*/\1/p' "$scratch/$name.mock" | sort -u)
+  check "[[ $leaked -eq 0 ]]" "$name leaves no live mock process"
+}
+
+json="$(run_case ok ok login)"
+check "[[ -n '$json' ]]" "ok probe completes"
+check "[[ \"$(field "$json" installed)\" == true && \"$(field "$json" daemonRunning)\" == true ]]" "reads populate service state"
+check "[[ \"$(field "$json" cliVersion)\" == 2026.4 && \"$(field "$json" cliVersionSupported)\" == true ]]" "direct probe preserves CLI-version support state"
+check "[[ \"$(field "$json" locations)\" -gt 0 ]]" "relay data parses"
+check "grep -q 'login-received-len=16' '$scratch/ok.mock'" "login stdin reaches direct child"
+check_orphans ok
+
+json="$(run_case hang hang none)"
+check "[[ \"$(field "$json" readWatchdogs)\" -eq 1 ]]" "read watchdog fires once"
+check "[[ \"$(field "$json" lastError)\" == *timed\ out* ]]" "read timeout is surfaced"
+check_orphans hang
+
+json="$(run_case flood flood none)"
+check "[[ \"$(field "$json" readOverflows)\" -eq 1 ]]" "streaming output limit fires once"
+check "[[ \"$(field "$json" readChars)\" -le 262144 ]]" "retained output stays bounded"
+check_orphans flood
+
+json="$(run_case action action-hang action-hang)"
+check "[[ \"$(field "$json" actionWatchdogs)\" -eq 1 ]]" "action watchdog fires once"
+check "[[ \"$(field "$json" lastError)\" == *timed\ out* ]]" "action timeout is surfaced"
+check_orphans action
+
+json="$(run_case fail fail none)"
+check "[[ -n '$json' && -z \"$(field "$json" note)\" ]]" "read queue drains after command failures"
+check_orphans fail
+
+json="$(run_case removed removed removed)"
+check "[[ \"$(field "$json" installed)\" == false && -z \"$(field "$json" note)\" ]]" "missing binary finalizes without wedging the queue"
+check "[[ \"$(field "$json" lastError)\" == *not\ found* ]]" "failed start is surfaced"
+check_orphans removed
+
+exit "$((failures > 0))"

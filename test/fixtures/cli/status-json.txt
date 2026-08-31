@@ -1,0 +1,1 @@
+{"state":"disconnected","details":{"location":{"country":"France","city":"Pantin"},"locked_down":false}}
