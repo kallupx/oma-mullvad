@@ -7,10 +7,13 @@
   "license": "MIT",
   "description": "A theme-aware Mullvad VPN control and status widget for the Omarchy bar.",
   "kinds": [
+    "service",
     "bar-widget"
   ],
+  "keepLoaded": true,
   "entryPoints": {
-    "barWidget": "Panel.qml"
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
   },
   "barWidget": {
     "displayName": "OmaMullvad",

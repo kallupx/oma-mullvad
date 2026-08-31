@@ -6,7 +6,7 @@ import "Model.js" as Model
 Item {
   id: root
 
-  property var settings: ({})
+  property var shell: null
   property int pollInterval: 30000
   readonly property string commandGuard: String(Qt.resolvedUrl("bounded-command")).replace(/^file:\/\//, "")
   readonly property int finiteOutputLines: 4096
