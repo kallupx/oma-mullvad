@@ -33,8 +33,25 @@ fi
 
 case "$*" in
   --version) cat "$fixtures/version.txt" ;;
-  "status --json") cat "$fixtures/status-json.txt" ;;
-  "status --json listen") cat "$fixtures/status-json.txt"; exec sleep 600 ;;
+  "status --json")
+    if [[ -n "${MULLVAD_MOCK_STATUS_DELAY_TRIGGER:-}" && -e "$MULLVAD_MOCK_STATUS_DELAY_TRIGGER" ]]; then
+      rm -f "$MULLVAD_MOCK_STATUS_DELAY_TRIGGER"
+      sleep 1.2
+    fi
+    cat "$fixtures/status-json.txt"
+    ;;
+  "status --json listen")
+    if [[ -n "${MULLVAD_MOCK_LISTEN_SCRIPT:-}" ]]; then
+      while IFS=' ' read -r delay payload; do
+        [[ -n "$delay" && -n "$payload" ]] || continue
+        sleep "$delay"
+        printf '%s\n' "$payload"
+      done < "$MULLVAD_MOCK_LISTEN_SCRIPT"
+      exec sleep 600
+    fi
+    cat "$fixtures/status-json.txt"
+    exec sleep 600
+    ;;
   "account get") cat "$fixtures/account-get.txt" ;;
   "relay list") cat "$fixtures/relay-list.txt" ;;
   "relay get") cat "$fixtures/relay-get.txt" ;;

@@ -23,10 +23,15 @@ check() {
 run_case() {
   local name="$1" mode="$2" scenario="$3"
   local path_dir="$scratch/$name-bin"
+  local listen_script=""
+  [[ "$scenario" == state-sequence ]] && listen_script="$plugin_dir/test/fixtures/listen-sequence.txt"
+  [[ "$scenario" == status-race ]] && listen_script="$plugin_dir/test/fixtures/listen-race.txt"
   mkdir -p "$path_dir"
   ln -s "$plugin_dir/test/mocks/mullvad" "$path_dir/mullvad"
   : > "$scratch/$name.mock"
   MULLVAD_MOCK_MODE="$mode" MULLVAD_MOCK_LOG="$scratch/$name.mock" \
+    MULLVAD_MOCK_LISTEN_SCRIPT="$listen_script" \
+    MULLVAD_MOCK_STATUS_DELAY_TRIGGER="$scratch/$name.delay" \
     MULLVAD_PROBE_SCENARIO="$scenario" MULLVAD_PLUGIN_DIR="$plugin_dir" \
     PATH="$path_dir:$PATH" timeout 20 qs -n -p "$probe_dir/service-probe.qml" \
     > "$scratch/$name.log" 2>&1
@@ -76,5 +81,15 @@ json="$(run_case removed removed removed)"
 check "[[ \"$(field "$json" installed)\" == false && -z \"$(field "$json" note)\" ]]" "missing binary finalizes without wedging the queue"
 check "[[ \"$(field "$json" lastError)\" == *not\ found* ]]" "failed start is surfaced"
 check_orphans removed
+
+json="$(run_case sequence ok state-sequence)"
+trace="$(field "$json" stateTrace)"
+check "[[ \"$trace\" == *connecting* && \"$trace\" == *connected* && \"$trace\" == *error* && \"$trace\" == *disconnected* ]]" "listener sequence exposes every protection-state transition"
+check "[[ \"$(field "$json" finalState)\" == disconnected && \"$(field "$json" finalConnected)\" == false ]]" "listener sequence settles truthfully disconnected"
+check_orphans sequence
+
+json="$(run_case race ok status-race)"
+check "[[ \"$(field "$json" finalState)\" == connected && \"$(field "$json" finalConnected)\" == true ]]" "stale delayed poll cannot overwrite a newer listener event"
+check_orphans race
 
 exit "$((failures > 0))"

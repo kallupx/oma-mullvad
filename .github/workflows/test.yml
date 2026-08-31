@@ -10,10 +10,49 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    container: archlinux:latest
+    timeout-minutes: 10
     steps:
+      - name: Install Git
+        run: pacman -Syu --noconfirm git
+
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 24
-      - run: node --test
+
+      - name: Trust the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Install probe dependencies
+        run: |
+          printf '[omarchy]\nSigLevel = Optional TrustAll\nServer = https://pkgs.omarchy.org/stable/$arch\n' >> /etc/pacman.conf
+          pacman -Syu --noconfirm quickshell cage nodejs jq
+
+      - name: Extract Omarchy shell and validator
+        run: |
+          pacman -Swdd --noconfirm omarchy
+          package="$(find /var/cache/pacman/pkg -maxdepth 1 -type f -name 'omarchy-[0-9]*-any.pkg.tar.zst' -print -quit)"
+          test -n "$package"
+          bsdtar -x -C / -f "$package" usr/share/omarchy/shell usr/share/omarchy/bin usr/bin/omarchy-plugin-validate
+
+      - name: Validate and lint QML
+        run: |
+          omarchy-plugin-validate .
+          mkdir -p /tmp/qmlroot
+          ln -s /usr/share/omarchy/shell /tmp/qmlroot/qs
+          count=0
+          while IFS= read -r file; do
+            /usr/lib/qt6/bin/qmllint -I /tmp/qmlroot -I /usr/share/omarchy/shell "$file"
+            count=$((count + 1))
+          done < <(find . -type f -name '*.qml' -print)
+          test "$count" -ge 8
+
+      - name: Unit and headless QML probes
+        env:
+          WLR_BACKENDS: headless
+          WLR_RENDERER: pixman
+          WLR_LIBINPUT_NO_DEVICES: "1"
+          XDG_RUNTIME_DIR: /tmp/xdg-runtime
+          QT_QUICK_BACKEND: software
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          cage -- bash test/all

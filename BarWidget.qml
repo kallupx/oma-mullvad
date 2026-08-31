@@ -69,6 +69,10 @@ BarWidget {
   onSettingsChanged: { injectPanel(); pushPollInterval() }
   onSvcChanged: { loadPanel(); injectPanel(); pushPollInterval() }
 
+  readonly property var _probePanelItem: panelLoader.item
+  readonly property bool _probePanelActive: panelLoader.active
+  readonly property int _probePanelStatus: panelLoader.status
+
   Loader {
     id: panelLoader
     active: root.svc !== null
