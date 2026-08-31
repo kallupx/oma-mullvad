@@ -1,0 +1,1 @@
+mullvad-cli 2026.4

@@ -1,0 +1,3 @@
+Sweden (se)
+	Gothenburg (got) @ 57.70887°N, 11.97456°W
+		se-got-wg-001 (192.0.2.1, 2001:db8::1) - hosted by Example (owned)

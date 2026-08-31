@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+use_cage=1
+[[ "${1:-}" == --no-cage ]] && use_cage=0
+[[ $# -le 1 ]] || { echo "usage: test/ci-local [--no-cage]" >&2; exit 2; }
+
+omarchy plugin validate "$root"
+mkdir -p /tmp/oma-mullvad-qmlroot
+ln -sfn /usr/share/omarchy/shell /tmp/oma-mullvad-qmlroot/qs
+while IFS= read -r file; do
+  /usr/lib/qt6/bin/qmllint -I /tmp/oma-mullvad-qmlroot -I /usr/share/omarchy/shell "$file" >/dev/null
+done < <(find "$root" -type f -name '*.qml' -print)
+
+if [[ "$use_cage" -eq 0 ]]; then
+  exec bash "$root/test/all"
+fi
+
+command -v cage >/dev/null || { echo "cage is required; use --no-cage for the current session" >&2; exit 1; }
+export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$(mktemp -d)}"
+export QT_QUICK_BACKEND=software
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+exec cage -- bash "$root/test/all"
