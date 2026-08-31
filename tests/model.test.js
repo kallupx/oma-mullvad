@@ -47,6 +47,17 @@ test("status JSON and listen events normalize connection details", () => {
     assert.equal(Model.parseStatus({ state: "connected", details: {} }).lockedDown, undefined);
 });
 
+test("CLI version warning only trusts the tested release series", () => {
+    assert.deepEqual(Model.SUPPORTED_CLI_SERIES, ["2026.4"]);
+    assert.equal(Model.parseCliVersion("mullvad-cli 2026.4.1\n"), "2026.4.1");
+    assert.equal(Model.parseCliVersion("unexpected output"), "");
+    assert.equal(Model.isCliVersionSupported("2026.4"), true);
+    assert.equal(Model.isCliVersionSupported("2026.4.1"), true);
+    assert.equal(Model.isCliVersionSupported("2026.40"), false);
+    assert.equal(Model.isCliVersionSupported("2027.1"), false);
+    assert.equal(Model.isCliVersionSupported("2026.4-beta1"), false);
+});
+
 const relayOutput = `Sweden (se)
 \tGothenburg (got) @ 57.70887°N, 11.97456°W
 \t\tse-got-wg-001 (185.65.134.66, 2a03:1b20:5:f011::a01f) - hosted by 31173 (Mullvad-owned)

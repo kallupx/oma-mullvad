@@ -13,6 +13,7 @@ var MAX_SERVERS = 2048;
 var MAX_SERVERS_PER_LOCATION = 128;
 var MAX_PROVIDERS = 128;
 var MAX_EXCLUDED_PIDS = 256;
+var SUPPORTED_CLI_SERIES = ["2026.4"];
 
 function text(value) {
     return value === undefined || value === null ? "" : String(value);
@@ -47,6 +48,16 @@ function plainText(value, maxChars) {
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, limit);
+}
+
+function parseCliVersion(raw) {
+    var match = plainText(raw, 64).match(/^mullvad-cli\s+(\d+\.\d+(?:\.\d+)?)(?:\s|$)/);
+    return match ? match[1] : "";
+}
+
+function isCliVersionSupported(version) {
+    var match = plainText(version, 32).match(/^(\d+\.\d+)(?:\.\d+)?$/);
+    return match !== null && SUPPORTED_CLI_SERIES.indexOf(match[1]) !== -1;
 }
 
 function parseJsonLines(raw) {
@@ -755,6 +766,9 @@ function argv(action, params) {
 var api = {
     redact: redact,
     plainText: plainText,
+    SUPPORTED_CLI_SERIES: SUPPORTED_CLI_SERIES,
+    parseCliVersion: parseCliVersion,
+    isCliVersionSupported: isCliVersionSupported,
     parseStatus: parseStatus,
     isTunnelStateEvent: isTunnelStateEvent,
     parseRelayList: parseRelayList,
