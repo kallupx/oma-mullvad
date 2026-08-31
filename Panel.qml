@@ -27,6 +27,9 @@ Panel {
   property var recentLocations: []
   property var pendingConfirmation: null
   property bool syncingSettings: false
+  readonly property bool cliReady: service.installed && service.daemonRunning
+
+  function pageAvailable(index) { return index === 0 || cliReady }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -275,11 +278,21 @@ Panel {
   }
 
   function showPage(index) {
-    pageIndex = Math.max(0, Math.min(3, index))
+    var target = Math.max(0, Math.min(3, index))
+    if (!pageAvailable(target)) return
+    pageIndex = target
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
-  function movePage(delta) { showPage((pageIndex + delta + 4) % 4) }
+  function movePage(delta) {
+    var next = pageIndex
+    for (var i = 0; i < 4; i++) {
+      next = (next + delta + 4) % 4
+      if (pageAvailable(next)) { showPage(next); return }
+    }
+  }
+
+  onCliReadyChanged: if (!pageAvailable(pageIndex)) showPage(0)
 
   function moveScroll(delta) {
     if (!pageFlick) return
@@ -384,7 +397,7 @@ Panel {
         if (dx) root.movePage(dx)
         else root.moveScroll(dy)
       }
-      onActivateRequested: service.toggleTunnel()
+      onActivateRequested: if (root.cliReady) service.toggleTunnel()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.focusNext(direction) }
       onTextKey: function(text) {
@@ -393,9 +406,9 @@ Panel {
         else if (text === "3") root.showPage(2)
         else if (text === "4") root.showPage(3)
         else if (text === "r" || text === "R") service.refreshAll()
-        else if (text === "t" || text === "T") service.toggleTunnel()
-        else if (text === "n" || text === "N") root.cycleFavorite(1)
-        else if (text === "p" || text === "P") root.cycleFavorite(-1)
+        else if ((text === "t" || text === "T") && root.cliReady) service.toggleTunnel()
+        else if ((text === "n" || text === "N") && root.cliReady) root.cycleFavorite(1)
+        else if ((text === "p" || text === "P") && root.cliReady) root.cycleFavorite(-1)
       }
 
       Column {
@@ -415,7 +428,9 @@ Panel {
               Layout.fillWidth: true
               text: modelData
               selected: root.pageIndex === index
-              focusable: true
+              enabled: root.pageAvailable(index)
+              opacity: root.pageAvailable(index) ? 1 : 0.35
+              focusable: root.pageAvailable(index)
               foreground: root.foreground
               fontFamily: root.fontFamily
               horizontalPadding: Style.spacing.md
@@ -491,7 +506,8 @@ Panel {
         implicitHeight: overviewHero.implicitHeight
         readonly property bool tunnelChecked: service.active
         readonly property bool tunnelBusy: service.busy || !service.installed || !service.daemonRunning
-        readonly property string tunnelTooltip: root.tunnelHint
+        readonly property string tunnelTooltip: root.cliReady ? root.tunnelHint
+          : !service.installed ? "Install Mullvad VPN first" : "Start the Mullvad daemon first"
         readonly property color controlAccent: root.accent
         function toggleTunnel() { if (!tunnelBusy) service.toggleTunnel() }
 
@@ -516,7 +532,9 @@ Panel {
               id: tunnelSwitch
               checked: overviewHeader.tunnelChecked
               busy: overviewHeader.tunnelBusy
-              activeFocusOnTab: true
+              enabled: root.cliReady
+              opacity: root.cliReady ? 1 : 0.35
+              activeFocusOnTab: root.cliReady
               hasCursor: activeFocus
               foreground: overviewHero.foreground
               accent: overviewHeader.controlAccent
@@ -649,6 +667,7 @@ Panel {
 
       BorderSurface {
         id: relayMap
+        visible: root.cliReady
         width: parent.width
         height: Math.round(width * 0.50)
         color: Util.alpha(root.foreground, 0.025)
@@ -667,7 +686,7 @@ Panel {
       }
 
       OmaDropdown {
-        visible: root.favoriteOptions().length > 1
+        visible: root.cliReady && root.favoriteOptions().length > 1
         width: parent.width
         label: "Quick select favourite"
         options: root.favoriteOptions()
@@ -689,7 +708,8 @@ Panel {
         triggerLabel: root.relayTargetLabel()
         options: root.locationOptions()
         value: root.constraintKey((service.relayConstraints || {}).location)
-        enabled: !service.busy
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onChanged: function(value) {
@@ -703,6 +723,8 @@ Panel {
 
       Column {
         visible: !service.loggedIn
+        enabled: root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         width: parent.width
         spacing: Style.space(8)
 
@@ -782,7 +804,7 @@ Panel {
           text: "Logout"
           focusable: true
           bordered: true
-          enabled: !service.busy
+          enabled: !service.busy && root.cliReady
           foreground: root.urgent
           onClicked: root.confirmAction("Log out of the Mullvad account on this device?", function() { service.logout() })
         }
@@ -796,7 +818,8 @@ Panel {
         label: "Lockdown mode"
         description: "Block all network access whenever Mullvad is disconnected"
         checked: service.lockdown
-        enabled: !service.busy && service.installed
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: service.setLockdown(!service.lockdown)
@@ -806,7 +829,8 @@ Panel {
         label: "Auto-connect"
         description: "Connect Mullvad when its daemon starts"
         checked: service.autoConnect
-        enabled: !service.busy && service.installed
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: service.setAutoConnect(!service.autoConnect)
@@ -816,7 +840,8 @@ Panel {
         label: "Local network sharing"
         description: "Allow access to devices on the local network"
         checked: service.lanSharing
-        enabled: !service.busy && service.installed
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: service.setLanSharing(!service.lanSharing)

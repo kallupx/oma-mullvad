@@ -121,6 +121,20 @@ ShellRoot {
       serviceLoader.active = false
       lifecycleWait.start()
       lifecycleWait.firstLoaded = firstLoaded
+    } else if (scenario === "availability-cli" || scenario === "availability-daemon" || scenario === "availability-ready") {
+      var panel = widget._probePanelItem
+      service.installed = scenario !== "availability-cli"
+      service.daemonRunning = scenario === "availability-ready"
+      panel.showPage(2)
+      finish("", {
+        cliReady: panel.cliReady,
+        overviewAvailable: panel.pageAvailable(0),
+        locationsAvailable: panel.pageAvailable(1),
+        advancedAvailable: panel.pageAvailable(2),
+        excludedAvailable: panel.pageAvailable(3),
+        selectedPage: panel.pageIndex,
+        barTooltip: widget.barTooltip
+      })
     } else finish("unknown scenario")
   }
 

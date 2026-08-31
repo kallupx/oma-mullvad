@@ -50,4 +50,17 @@ check "[[ \"$(field "$json" firstPanelLoaded)\" == true ]]" "Panel exists while 
 check "[[ \"$(field "$json" loaderInactive)\" == true && \"$(field "$json" loaderStatusNull)\" == true ]]" "Panel Loader deactivates when the service disappears"
 check "[[ \"$(field "$json" panelDestroyed)\" == true ]]" "stale Panel is destroyed"
 
+json="$(run_case availability-cli)"
+check "[[ \"$(field "$json" cliReady)\" == false && \"$(field "$json" overviewAvailable)\" == true ]]" "Overview remains available without the CLI"
+check "[[ \"$(field "$json" locationsAvailable)\" == false && \"$(field "$json" advancedAvailable)\" == false && \"$(field "$json" excludedAvailable)\" == false ]]" "CLI-dependent pages lock without the CLI"
+check "[[ \"$(field "$json" selectedPage)\" == 0 && \"$(field "$json" barTooltip)\" == *not\ installed* ]]" "unavailable CLI cannot navigate away from Overview"
+
+json="$(run_case availability-daemon)"
+check "[[ \"$(field "$json" cliReady)\" == false && \"$(field "$json" selectedPage)\" == 0 ]]" "daemon unavailability keeps the panel on Overview"
+check "[[ \"$(field "$json" locationsAvailable)\" == false && \"$(field "$json" barTooltip)\" == *daemon*unavailable* ]]" "daemon-dependent pages and tunnel UI remain unavailable"
+
+json="$(run_case availability-ready)"
+check "[[ \"$(field "$json" cliReady)\" == true && \"$(field "$json" advancedAvailable)\" == true ]]" "pages unlock when CLI and daemon are ready"
+check "[[ \"$(field "$json" selectedPage)\" == 2 ]]" "ready panel can navigate to Advanced"
+
 exit "$((failures > 0))"

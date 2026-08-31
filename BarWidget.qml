@@ -97,7 +97,9 @@ BarWidget {
       }
     }
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) { if (root.svc) root.svc.toggleTunnel() }
+      if (buttonCode === Qt.RightButton) {
+        if (root.svc && root.svc.installed && root.svc.daemonRunning) root.svc.toggleTunnel()
+      }
       else if (buttonCode === Qt.MiddleButton) { if (root.svc) root.svc.refreshAll() }
       else root.toggle()
     }
