@@ -1,0 +1,1 @@
+0.35 {"state":"connected","details":{"location":{"country":"Sweden","city":"Gothenburg","hostname":"se-got-wg-001"}}}

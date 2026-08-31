@@ -69,6 +69,10 @@ BarWidget {
   onSettingsChanged: { injectPanel(); pushPollInterval() }
   onSvcChanged: { loadPanel(); injectPanel(); pushPollInterval() }
 
+  readonly property var _probePanelItem: panelLoader.item
+  readonly property bool _probePanelActive: panelLoader.active
+  readonly property int _probePanelStatus: panelLoader.status
+
   Loader {
     id: panelLoader
     active: root.svc !== null
@@ -93,7 +97,9 @@ BarWidget {
       }
     }
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) { if (root.svc) root.svc.toggleTunnel() }
+      if (buttonCode === Qt.RightButton) {
+        if (root.svc && root.svc.installed && root.svc.daemonRunning) root.svc.toggleTunnel()
+      }
       else if (buttonCode === Qt.MiddleButton) { if (root.svc) root.svc.refreshAll() }
       else root.toggle()
     }

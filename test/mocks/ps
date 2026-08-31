@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+mock_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+case "$*" in
+  "-o pid=,ppid=,uunit=,comm= -p "*) cat "$mock_dir/../fixtures/cli/ps-table.txt" ;;
+  *) echo "ps mock: unhandled invocation: $*" >&2; exit 2 ;;
+esac

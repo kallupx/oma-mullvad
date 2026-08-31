@@ -27,6 +27,10 @@ Panel {
   property var recentLocations: []
   property var pendingConfirmation: null
   property bool syncingSettings: false
+  readonly property bool cliReady: service.installed && service.daemonRunning
+  readonly property var _probePageItem: pageLoader.item
+
+  function pageAvailable(index) { return index === 0 || cliReady }
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -274,12 +278,42 @@ Panel {
     return result
   }
 
+  function excludedApps() {
+    if (!bar || !bar.shell || !bar.shell.appLibrary) return []
+    var library = bar.shell.appLibrary
+    var source = library.sortedEntries("")
+    var result = []
+    for (var i = 0; i < source.length; i++) {
+      var entry = source[i].entry || source[i]
+      if (!entry) continue
+      var firstWord = String(entry.execString || "").trim().split(/\s+/)[0] || ""
+      var execBase = firstWord.split("/").pop()
+      if (execBase) result.push({ name: Model.plainText(library.entryName(entry), 128), execBase: execBase })
+    }
+    return result
+  }
+
+  function excludedGroups() {
+    return Model.groupExcludedProcesses(arrayFrom(service.excludedProcesses), excludedApps())
+  }
+
   function showPage(index) {
-    pageIndex = Math.max(0, Math.min(3, index))
+    var target = Math.max(0, Math.min(3, index))
+    if (!pageAvailable(target)) return
+    pageIndex = target
+    if (target === 3) service.refreshExcluded()
     Qt.callLater(function() { if (keyCatcher) keyCatcher.forceActiveFocus() })
   }
 
-  function movePage(delta) { showPage((pageIndex + delta + 4) % 4) }
+  function movePage(delta) {
+    var next = pageIndex
+    for (var i = 0; i < 4; i++) {
+      next = (next + delta + 4) % 4
+      if (pageAvailable(next)) { showPage(next); return }
+    }
+  }
+
+  onCliReadyChanged: if (!pageAvailable(pageIndex)) showPage(0)
 
   function moveScroll(delta) {
     if (!pageFlick) return
@@ -336,6 +370,13 @@ Panel {
   }
   Component.onCompleted: syncInlineSettings()
 
+  Timer {
+    interval: 5000
+    running: root.opened && root.pageIndex === 3
+    repeat: true
+    onTriggered: service.refreshExcluded()
+  }
+
   IpcHandler {
     target: root.ipcTarget
     function open(): void { root.open() }
@@ -348,6 +389,7 @@ Panel {
     function connect(): string { service.connectTunnel(); return "ok" }
     function disconnect(): string { service.disconnectTunnel(); return "ok" }
     function toggleTunnel(): string { service.toggleTunnel(); return "ok" }
+    function excluded(): string { return JSON.stringify(root.excludedGroups()) }
     function nextFavorite(): string { return root.cycleFavorite(1) }
     function previousFavorite(): string { return root.cycleFavorite(-1) }
     function favorite(index: string): string { return root.chooseFavorite(index) }
@@ -384,7 +426,7 @@ Panel {
         if (dx) root.movePage(dx)
         else root.moveScroll(dy)
       }
-      onActivateRequested: service.toggleTunnel()
+      onActivateRequested: if (root.cliReady) service.toggleTunnel()
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.focusNext(direction) }
       onTextKey: function(text) {
@@ -393,9 +435,9 @@ Panel {
         else if (text === "3") root.showPage(2)
         else if (text === "4") root.showPage(3)
         else if (text === "r" || text === "R") service.refreshAll()
-        else if (text === "t" || text === "T") service.toggleTunnel()
-        else if (text === "n" || text === "N") root.cycleFavorite(1)
-        else if (text === "p" || text === "P") root.cycleFavorite(-1)
+        else if ((text === "t" || text === "T") && root.cliReady) service.toggleTunnel()
+        else if ((text === "n" || text === "N") && root.cliReady) root.cycleFavorite(1)
+        else if ((text === "p" || text === "P") && root.cliReady) root.cycleFavorite(-1)
       }
 
       Column {
@@ -415,7 +457,9 @@ Panel {
               Layout.fillWidth: true
               text: modelData
               selected: root.pageIndex === index
-              focusable: true
+              enabled: root.pageAvailable(index)
+              opacity: root.pageAvailable(index) ? 1 : 0.35
+              focusable: root.pageAvailable(index)
               foreground: root.foreground
               fontFamily: root.fontFamily
               horizontalPadding: Style.spacing.md
@@ -491,7 +535,8 @@ Panel {
         implicitHeight: overviewHero.implicitHeight
         readonly property bool tunnelChecked: service.active
         readonly property bool tunnelBusy: service.busy || !service.installed || !service.daemonRunning
-        readonly property string tunnelTooltip: root.tunnelHint
+        readonly property string tunnelTooltip: root.cliReady ? root.tunnelHint
+          : !service.installed ? "Install Mullvad VPN first" : "Start the Mullvad daemon first"
         readonly property color controlAccent: root.accent
         function toggleTunnel() { if (!tunnelBusy) service.toggleTunnel() }
 
@@ -516,7 +561,9 @@ Panel {
               id: tunnelSwitch
               checked: overviewHeader.tunnelChecked
               busy: overviewHeader.tunnelBusy
-              activeFocusOnTab: true
+              enabled: root.cliReady
+              opacity: root.cliReady ? 1 : 0.35
+              activeFocusOnTab: root.cliReady
               hasCursor: activeFocus
               foreground: overviewHero.foreground
               accent: overviewHeader.controlAccent
@@ -649,6 +696,7 @@ Panel {
 
       BorderSurface {
         id: relayMap
+        visible: root.cliReady
         width: parent.width
         height: Math.round(width * 0.50)
         color: Util.alpha(root.foreground, 0.025)
@@ -667,7 +715,7 @@ Panel {
       }
 
       OmaDropdown {
-        visible: root.favoriteOptions().length > 1
+        visible: root.cliReady && root.favoriteOptions().length > 1
         width: parent.width
         label: "Quick select favourite"
         options: root.favoriteOptions()
@@ -689,7 +737,8 @@ Panel {
         triggerLabel: root.relayTargetLabel()
         options: root.locationOptions()
         value: root.constraintKey((service.relayConstraints || {}).location)
-        enabled: !service.busy
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onChanged: function(value) {
@@ -703,6 +752,8 @@ Panel {
 
       Column {
         visible: !service.loggedIn
+        enabled: root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         width: parent.width
         spacing: Style.space(8)
 
@@ -782,7 +833,7 @@ Panel {
           text: "Logout"
           focusable: true
           bordered: true
-          enabled: !service.busy
+          enabled: !service.busy && root.cliReady
           foreground: root.urgent
           onClicked: root.confirmAction("Log out of the Mullvad account on this device?", function() { service.logout() })
         }
@@ -796,7 +847,8 @@ Panel {
         label: "Lockdown mode"
         description: "Block all network access whenever Mullvad is disconnected"
         checked: service.lockdown
-        enabled: !service.busy && service.installed
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: service.setLockdown(!service.lockdown)
@@ -806,7 +858,8 @@ Panel {
         label: "Auto-connect"
         description: "Connect Mullvad when its daemon starts"
         checked: service.autoConnect
-        enabled: !service.busy && service.installed
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: service.setAutoConnect(!service.autoConnect)
@@ -816,7 +869,8 @@ Panel {
         label: "Local network sharing"
         description: "Allow access to devices on the local network"
         checked: service.lanSharing
-        enabled: !service.busy && service.installed
+        enabled: !service.busy && root.cliReady
+        opacity: root.cliReady ? 1 : 0.35
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: service.setLanSharing(!service.lanSharing)
@@ -1351,13 +1405,14 @@ Panel {
       width: pageFlick.width
       spacing: Style.space(12)
       property var apps: root.appRows()
+      property var groups: root.excludedGroups()
       Keys.onEscapePressed: root.close()
 
       PanelHero {
         width: parent.width
         title: "Excluded applications"
         meta: "Launch outside the Mullvad tunnel"
-        detail: String(service.excludedPids.length)
+        detail: String(excludedColumn.groups.length)
         foreground: root.foreground
         fontFamily: root.fontFamily
         iconComponent: Component {
@@ -1379,7 +1434,7 @@ Panel {
 
       Text {
         textFormat: Text.PlainText
-        visible: service.excludedPids.length === 0
+        visible: excludedColumn.groups.length === 0
         width: parent.width
         text: "No excluded processes are currently reported."
         color: root.dim
@@ -1389,15 +1444,15 @@ Panel {
       }
 
       Column {
-        visible: service.excludedPids.length > 0
+        visible: excludedColumn.groups.length > 0
         width: parent.width
         spacing: Style.space(5)
         Repeater {
-          model: service.excludedPids
-          ExcludedPidRow {
+          model: excludedColumn.groups
+          ExcludedGroupRow {
             required property var modelData
             width: parent.width
-            process: modelData
+            group: modelData
           }
         }
       }
@@ -1458,17 +1513,19 @@ Panel {
     }
   }
 
-  component ExcludedPidRow: CursorSurface {
-    id: pidRow
-    property var process: null
-    readonly property string pidText: String(process && process.pid !== undefined ? process.pid : process || "")
-    readonly property string commandText: String(process && (process.command || process.name) ? (process.command || process.name) : "Excluded process")
+  component ExcludedGroupRow: CursorSurface {
+    id: groupRow
+    property var group: null
+    readonly property string labelText: Model.plainText(group && group.label ? group.label : "Excluded process", 128)
+    readonly property int procCount: group && group.count ? group.count : 0
+    readonly property string rootPidText: String(group && group.rootPid !== undefined ? group.rootPid : "")
+    readonly property var pids: (group && group.pids) || []
 
     foreground: root.foreground
-    implicitHeight: pidContent.implicitHeight + Style.space(12)
+    implicitHeight: groupContent.implicitHeight + Style.space(12)
 
     RowLayout {
-      id: pidContent
+      id: groupContent
       anchors.left: parent.left
       anchors.right: parent.right
       anchors.verticalCenter: parent.verticalCenter
@@ -1488,7 +1545,7 @@ Panel {
         Text {
           textFormat: Text.PlainText
           Layout.fillWidth: true
-          text: pidRow.commandText
+          text: groupRow.labelText
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -1497,7 +1554,7 @@ Panel {
         Text {
           textFormat: Text.PlainText
           Layout.fillWidth: true
-          text: "PID " + pidRow.pidText
+          text: groupRow.procCount + (groupRow.procCount === 1 ? " process" : " processes") + " · PID " + groupRow.rootPidText
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
@@ -1505,14 +1562,14 @@ Panel {
       }
       PanelActionButton {
         iconText: "󰅖"
-        tooltipText: "Remove PID from split tunneling"
+        tooltipText: "Stop excluding " + groupRow.labelText
         foreground: root.foreground
         hoverColor: root.urgent
         fontFamily: root.fontFamily
         focusable: true
-        enabled: !service.busy && pidRow.pidText !== ""
-        onClicked: root.confirmAction("Stop excluding PID " + pidRow.pidText + " from the Mullvad tunnel?", function() {
-          service.removeExcludedPid(pidRow.pidText)
+        enabled: !service.busy && groupRow.pids.length > 0
+        onClicked: root.confirmAction("Stop excluding " + groupRow.labelText + " (" + groupRow.procCount + " processes)?", function() {
+          service.removeExcludedPids(groupRow.pids)
         })
       }
     }

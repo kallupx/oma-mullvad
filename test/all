@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+status=0
+
+node --test "$root/tests"/*.test.js || status=1
+bash "$root/test/probe/run" || status=1
+bash "$root/test/probe/run-ui" || status=1
+exit "$status"
