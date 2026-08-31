@@ -1,0 +1,4 @@
+0.25 {"state":"connecting","details":{}}
+0.20 {"state":"connected","details":{"location":{"country":"Sweden","city":"Gothenburg","hostname":"se-got-wg-001"}}}
+0.20 {"state":"error","details":{"error":"tunnel lost"}}
+0.20 {"state":"disconnected","details":{}}

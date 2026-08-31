@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+plugin_dir="$(cd "$probe_dir/../.." && pwd)"
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+failures=0
+
+if ! command -v qs >/dev/null 2>&1; then
+  echo "UI probe skipped: qs is unavailable"
+  exit 0
+fi
+
+mkdir -p "$scratch/qmlroot" "$scratch/bin"
+ln -s /usr/share/omarchy/shell "$scratch/qmlroot/qs"
+ln -s "$plugin_dir/test/mocks/mullvad" "$scratch/bin/mullvad"
+
+field() {
+  node -e 'const v=JSON.parse(process.argv[1])[process.argv[2]]; process.stdout.write(v == null ? "" : String(v))' "$1" "$2"
+}
+
+check() {
+  if eval "$1"; then printf 'ok - %s\n' "$2"; else printf 'not ok - %s\n' "$2"; failures=$((failures + 1)); fi
+}
+
+run_case() {
+  local scenario="$1" log="$scratch/$1.log" mocklog="$scratch/$1.mock"
+  : > "$mocklog"
+  MULLVAD_MOCK_MODE=ok MULLVAD_MOCK_LOG="$mocklog" \
+    MULLVAD_UI_SCENARIO="$scenario" MULLVAD_PLUGIN_DIR="$plugin_dir" \
+    QML_IMPORT_PATH="$scratch/qmlroot" PATH="$scratch/bin:$PATH" \
+    timeout 20 qs -n -p "$probe_dir/ui-probe.qml" > "$log" 2>&1
+  if rg -n 'TypeError|ReferenceError|^\s*ERROR:' "$log" >/dev/null; then
+    sed -n '1,240p' "$log" >&2
+    return 1
+  fi
+  grep -o 'PROBE_RESULT .*' "$log" | tail -n1 | sed 's/^PROBE_RESULT //'
+}
+
+json="$(run_case state-icons)"
+check "[[ -n '$json' && -z \"$(field "$json" note)\" ]]" "real BarWidget and Panel instantiate without engine errors"
+check "[[ \"$(field "$json" panelLoaded)\" == true && \"$(field "$json" panelServiceMatches)\" == true ]]" "Panel receives the singleton service"
+check "[[ \"$(field "$json" connectedIcon)\" == connected && \"$(field "$json" errorIcon)\" == error ]]" "bar icon follows service truth"
+check "[[ \"$(field "$json" errorTooltip)\" == *error* ]]" "error state reaches the bar tooltip"
+
+json="$(run_case lifecycle)"
+check "[[ -n '$json' && -z \"$(field "$json" note)\" ]]" "service-null lifecycle completes without engine errors"
+check "[[ \"$(field "$json" firstPanelLoaded)\" == true ]]" "Panel exists while the service exists"
+check "[[ \"$(field "$json" loaderInactive)\" == true && \"$(field "$json" loaderStatusNull)\" == true ]]" "Panel Loader deactivates when the service disappears"
+check "[[ \"$(field "$json" panelDestroyed)\" == true ]]" "stale Panel is destroyed"
+
+exit "$((failures > 0))"

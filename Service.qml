@@ -8,10 +8,11 @@ Item {
 
   property var shell: null
   property int pollInterval: 30000
-  readonly property string commandGuard: String(Qt.resolvedUrl("bounded-command")).replace(/^file:\/\//, "")
   readonly property int finiteOutputLines: 4096
   readonly property int finiteOutputChars: 262144
   readonly property int listenerLineChars: 8192
+  property int readTimeoutMs: 10000
+  property int actionTimeoutMs: 20000
 
   property bool installed: false
   property string cliVersion: ""
@@ -72,6 +73,20 @@ Item {
   property int _actionOutputChars: 0
   readonly property bool busy: actionProcess.running || _actionQueue.length > 0
     || readProcess.running || _readQueue.length > 0
+  property bool _readWatchdogFired: false
+  property bool _actionWatchdogFired: false
+  property bool _readOverflowed: false
+  property bool _actionOverflowed: false
+  property int _readWatchdogFiredCount: 0
+  property int _actionWatchdogFiredCount: 0
+  property int _readOverflowCount: 0
+  property int _actionOverflowCount: 0
+  property int _readArmedPid: 0
+  property int _actionArmedPid: 0
+  property int _readGen: 0
+  property int _readExitedGen: -1
+  property int _actionGen: 0
+  property int _actionExitedGen: -1
 
   function _redact(value) {
     return Model.redact(String(value || ""))
@@ -83,50 +98,45 @@ Item {
     return text.length > 180 ? text.slice(0, 177) + "…" : text
   }
 
-  function _finiteCommand(command, timeoutSeconds) {
-    return [commandGuard, "finite", String(timeoutSeconds), String(finiteOutputLines),
-            String(finiteOutputChars), "--"].concat(command || [])
+  function _processForKind(kind) {
+    return kind === "read" ? readProcess : actionProcess
   }
 
-  function _listenerCommand(command) {
-    return [commandGuard, "listen", String(listenerLineChars), "--"].concat(command || [])
+  function _resetOutput(kind) {
+    root["_" + kind + "Lines"] = []
+    root["_" + kind + "ErrorLines"] = []
+    root["_" + kind + "OutputLines"] = 0
+    root["_" + kind + "OutputChars"] = 0
+    root["_" + kind + "Overflowed"] = false
   }
 
-  function _resetReadOutput() {
-    _readLines = []
-    _readErrorLines = []
-    _readOutputLines = 0
-    _readOutputChars = 0
-  }
-
-  function _appendReadOutput(line, errorStream) {
-    if (_readOutputLines >= finiteOutputLines || _readOutputChars >= finiteOutputChars) return
+  function _appendOutput(kind, line, errorStream) {
+    if (root["_" + kind + "Overflowed"]) return
+    var linesKey = "_" + kind + "OutputLines"
+    var charsKey = "_" + kind + "OutputChars"
+    var atLimit = root[linesKey] >= finiteOutputLines || root[charsKey] >= finiteOutputChars
     var value = _redact(line)
-    var remaining = finiteOutputChars - _readOutputChars
-    if (value.length > remaining) value = value.slice(0, remaining)
-    if (errorStream) _readErrorLines.push(value)
-    else _readLines.push(value)
-    _readOutputLines++
-    _readOutputChars += value.length + 1
+    if (!atLimit) {
+      var remaining = finiteOutputChars - root[charsKey]
+      if (value.length >= remaining) { value = value.slice(0, remaining); atLimit = true }
+      var outputKey = errorStream ? "_" + kind + "ErrorLines" : "_" + kind + "Lines"
+      root[outputKey] = root[outputKey].concat([value])
+      root[linesKey]++
+      root[charsKey] += value.length
+      if (root[linesKey] >= finiteOutputLines) atLimit = true
+    }
+    if (atLimit) {
+      root["_" + kind + "Overflowed"] = true
+      root["_" + kind + "OverflowCount"]++
+      var process = _processForKind(kind)
+      if (process.running) process.signal(15)
+    }
   }
 
-  function _resetActionOutput() {
-    _actionLines = []
-    _actionErrorLines = []
-    _actionOutputLines = 0
-    _actionOutputChars = 0
-  }
-
-  function _appendActionOutput(line, errorStream) {
-    if (_actionOutputLines >= finiteOutputLines || _actionOutputChars >= finiteOutputChars) return
-    var value = _redact(line)
-    var remaining = finiteOutputChars - _actionOutputChars
-    if (value.length > remaining) value = value.slice(0, remaining)
-    if (errorStream) _actionErrorLines.push(value)
-    else _actionLines.push(value)
-    _actionOutputLines++
-    _actionOutputChars += value.length + 1
-  }
+  function _resetReadOutput() { _resetOutput("read") }
+  function _appendReadOutput(line, errorStream) { _appendOutput("read", line, errorStream) }
+  function _resetActionOutput() { _resetOutput("action") }
+  function _appendActionOutput(line, errorStream) { _appendOutput("action", line, errorStream) }
 
   function _hasRead(kind) {
     if (readProcess.running && _readKind === kind) return true
@@ -135,9 +145,9 @@ Item {
     return false
   }
 
-  function _enqueueRead(kind, command) {
+  function _enqueueRead(kind, command, timeoutMs) {
     if (_hasRead(kind)) return
-    _readQueue = _readQueue.concat([{ kind: kind, command: command }])
+    _readQueue = _readQueue.concat([{ kind: kind, command: command, timeoutMs: timeoutMs || 0 }])
     _startNextRead()
   }
 
@@ -149,7 +159,10 @@ Item {
     _readKind = request.kind
     if (request.kind === "status") root._pendingStatusSeq = ++root._statusSeq
     _resetReadOutput()
-    readProcess.command = _finiteCommand(request.command, 10)
+    _readGen++
+    readWatchdog.interval = request.timeoutMs || root.readTimeoutMs
+    readWatchdog.restart()
+    readProcess.command = request.command
     readProcess.running = true
   }
 
@@ -229,7 +242,9 @@ Item {
         connected = false
         state = "unavailable"
         statusText = "Mullvad is not installed"
-        lastError = "Mullvad CLI not found. Install Mullvad VPN, then refresh."
+        lastError = String(error || "").indexOf("timed out") !== -1
+          ? "Mullvad CLI check timed out."
+          : "Mullvad CLI not found. Install Mullvad VPN, then refresh."
         if (listenerProcess.running) listenerProcess.running = false
       } else {
         if (lastError.indexOf("Mullvad CLI not found") === 0) lastError = ""
@@ -377,17 +392,26 @@ Item {
     return _enqueueAction(_command(action, params), label)
   }
 
+  function _armAction(command, label, secret) {
+    actionStatusTimer.stop()
+    _resetActionOutput()
+    _actionGen++
+    actionWatchdog.interval = root.actionTimeoutMs
+    actionWatchdog.restart()
+    actionProcess.stdinEnabled = true
+    actionProcess.label = label
+    actionProcess.secret = secret || ""
+    actionProcess.command = command
+    actionStatus = label + "…"
+    actionProcess.running = true
+  }
+
   function _startNextAction() {
     if (actionProcess.running || _actionQueue.length === 0) return
     var queue = _actionQueue.slice(0)
     var action = queue.shift()
     _actionQueue = queue
-    _resetActionOutput()
-    actionProcess.label = action.label
-    actionProcess.secret = ""
-    actionProcess.command = _finiteCommand(action.command, 20)
-    actionStatus = action.label + "…"
-    actionProcess.running = true
+    _armAction(action.command, action.label, "")
   }
 
   function connectTunnel() {
@@ -426,13 +450,8 @@ Item {
       secret = ""
       return
     }
-    _resetActionOutput()
-    actionProcess.label = "Logging in"
-    actionProcess.command = _finiteCommand(command, 20)
-    actionProcess.secret = secret
-    actionStatus = "Logging in…"
+    _armAction(command, "Logging in", secret)
     secret = ""
-    actionProcess.running = true
   }
 
   function logout() { _runAction("logout", {}, "Logging out") }
@@ -561,29 +580,77 @@ Item {
     onTriggered: root._enqueueRead("excludedPids", ["mullvad", "split-tunnel", "list"])
   }
 
+  Timer {
+    id: readWatchdog
+    repeat: false
+    onTriggered: {
+      if (!readProcess.running) return
+      root._readWatchdogFired = true
+      root._readWatchdogFiredCount++
+      readProcess.signal(15)
+      readKillTimer.restart()
+    }
+  }
+
+  Timer {
+    id: readKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (readProcess.running && readProcess.processId === root._readArmedPid)
+        readProcess.signal(9)
+    }
+  }
+
+  function _finalizeRead(exitCode, exitStatus, startError) {
+    readWatchdog.stop()
+    readKillTimer.stop()
+    var kind = root._readKind
+    root._readKind = ""
+    if (startError) root._applyRead(kind, "", startError, exitCode)
+    else if (root._readWatchdogFired) {
+      root._readWatchdogFired = false
+      root._applyRead(kind, "", "timed out", 124)
+    } else if (root._readOverflowed)
+      root._applyRead(kind, "", "output limit exceeded", 137)
+    else {
+      var effectiveCode = exitStatus === 1 && exitCode === 0 ? 1 : exitCode
+      root._applyRead(kind, root._readLines.join("\n"), root._readErrorLines.join("\n"), effectiveCode)
+    }
+    Qt.callLater(root._startNextRead)
+  }
+
   Process {
     id: readProcess
     command: []
     running: false
+    onStarted: root._readArmedPid = processId
+    onRunningChanged: {
+      if (!running && root._readGen > 0 && root._readKind !== "") {
+        var generation = root._readGen
+        Qt.callLater(function() {
+          if (root._readGen === generation && root._readExitedGen !== generation) {
+            root._readExitedGen = generation
+            root._finalizeRead(127, 0, "failed to start")
+          }
+        })
+      }
+    }
     stdout: SplitParser {
       onRead: function(line) { root._appendReadOutput(line, false) }
     }
     stderr: SplitParser {
       onRead: function(line) { root._appendReadOutput(line, true) }
     }
-    onExited: function(exitCode) {
-      var kind = root._readKind
-      var raw = root._readLines.join("\n")
-      var error = root._readErrorLines.join("\n")
-      root._readKind = ""
-      root._applyRead(kind, raw, error, exitCode)
-      Qt.callLater(root._startNextRead)
+    onExited: function(exitCode, exitStatus) {
+      root._readExitedGen = root._readGen
+      root._finalizeRead(exitCode, exitStatus, "")
     }
   }
 
   Process {
     id: listenerProcess
-    command: root._listenerCommand(["mullvad", "status", "--json", "listen"])
+    command: ["mullvad", "status", "--json", "listen"]
     running: false
     stdout: SplitParser {
       onRead: function(line) {
@@ -610,6 +677,66 @@ Item {
     }
   }
 
+  Timer {
+    id: actionWatchdog
+    repeat: false
+    onTriggered: {
+      if (!actionProcess.running) return
+      root._actionWatchdogFired = true
+      root._actionWatchdogFiredCount++
+      actionProcess.signal(15)
+      actionKillTimer.restart()
+    }
+  }
+
+  Timer {
+    id: actionKillTimer
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      if (actionProcess.running && actionProcess.processId === root._actionArmedPid)
+        actionProcess.signal(9)
+    }
+  }
+
+  function _finalizeAction(exitCode, exitStatus, startError) {
+    actionWatchdog.stop()
+    actionKillTimer.stop()
+    actionProcess.secret = ""
+    var label = actionProcess.label
+    var success = false
+    if (startError) {
+      root.lastError = root._shortError(startError, label + " failed")
+      root.actionStatus = root.lastError
+      root._actionQueue = []
+    } else if (root._actionWatchdogFired) {
+      root._actionWatchdogFired = false
+      root.lastError = label + " timed out"
+      root.actionStatus = root.lastError
+      root._actionQueue = []
+    } else if (root._actionOverflowed) {
+      root.lastError = label + " failed: output limit exceeded"
+      root.actionStatus = root.lastError
+      root._actionQueue = []
+    } else {
+      var effectiveCode = exitStatus === 1 && exitCode === 0 ? 1 : exitCode
+      var output = root._actionLines.join("\n")
+      var error = root._actionErrorLines.join("\n")
+      if (effectiveCode !== 0) {
+        root.lastError = root._shortError(error || output, label + " failed")
+        root.actionStatus = root.lastError
+        root._actionQueue = []
+      } else {
+        root.lastError = ""
+        root.actionStatus = label + " complete"
+        actionStatusTimer.restart()
+        success = true
+      }
+    }
+    root.refreshAll()
+    if (success) Qt.callLater(root._startNextAction)
+  }
+
   Process {
     id: actionProcess
     property string label: ""
@@ -618,11 +745,25 @@ Item {
     running: false
     stdinEnabled: true
     onStarted: {
+      root._actionArmedPid = processId
       if (secret.length > 0) {
         var value = secret
         secret = ""
         write(value + "\n")
         value = ""
+      }
+      stdinEnabled = false
+    }
+    onRunningChanged: {
+      if (!running && root._actionGen > 0 && actionProcess.label !== "") {
+        secret = ""
+        var generation = root._actionGen
+        Qt.callLater(function() {
+          if (root._actionGen === generation && root._actionExitedGen !== generation) {
+            root._actionExitedGen = generation
+            root._finalizeAction(127, 0, "failed to start")
+          }
+        })
       }
     }
     stdout: SplitParser {
@@ -631,20 +772,9 @@ Item {
     stderr: SplitParser {
       onRead: function(line) { root._appendActionOutput(line, true) }
     }
-    onExited: function(exitCode) {
-      var output = root._actionLines.join("\n")
-      var error = root._actionErrorLines.join("\n")
-      if (exitCode !== 0) {
-        root.lastError = root._shortError(error || output, label + " failed")
-        root.actionStatus = root.lastError
-        root._actionQueue = []
-      } else {
-        root.lastError = ""
-        root.actionStatus = label + " complete"
-        actionStatusTimer.restart()
-      }
-      root.refreshAll()
-      if (exitCode === 0) Qt.callLater(root._startNextAction)
+    onExited: function(exitCode, exitStatus) {
+      root._actionExitedGen = root._actionGen
+      root._finalizeAction(exitCode, exitStatus, "")
     }
   }
 }
