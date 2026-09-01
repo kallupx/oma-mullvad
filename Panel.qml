@@ -507,6 +507,7 @@ Panel {
             ThemeIcon {
               iconSize: Style.font.display
               state: root.stateIcon
+              locked: service.connected || service.state === "connecting"
               color: root.stateColor
               urgentColor: root.urgent
             }

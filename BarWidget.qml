@@ -85,8 +85,9 @@ BarWidget {
       Item {
         ThemeIcon {
           anchors.centerIn: parent
-          iconSize: Style.bar.iconCanvas
+          iconSize: Style.space(11)
           state: root.stateIcon
+          locked: root.svc ? (root.svc.connected || root.svc.state === "connecting") : false
           color: root.svc && root.svc.connected ? root.barForeground : Qt.darker(root.barForeground, 1.5)
           urgentColor: root.urgent
         }
