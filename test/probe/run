@@ -63,6 +63,11 @@ check "[[ \"$(field "$json" readOverflows)\" -eq 1 ]]" "streaming output limit f
 check "[[ \"$(field "$json" readChars)\" -le 262144 ]]" "retained output stays bounded"
 check_orphans flood
 
+json="$(run_case listener-flood listener-flood listener-flood)"
+check "[[ \"$(field "$json" listenerOverflows)\" -ge 1 ]]" "listener rejects an unterminated over-limit line"
+check "[[ \"$(field "$json" lastError)\" == *output\ limit\ exceeded* ]]" "listener overflow is surfaced"
+check_orphans listener-flood
+
 json="$(run_case action action-hang action-hang)"
 check "[[ \"$(field "$json" actionWatchdogs)\" -eq 1 ]]" "action watchdog fires once"
 check "[[ \"$(field "$json" lastError)\" == *timed\ out* ]]" "action timeout is surfaced"

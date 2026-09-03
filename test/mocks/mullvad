@@ -13,9 +13,14 @@ case "$mode" in
   hang) exec sleep 600 ;;
   flood)
     chunk="$(head -c 65536 /dev/zero | tr '\0' x)"
-    while true; do printf '%s\n' "$chunk"; done
+    while true; do printf '%s' "$chunk"; done
     ;;
 esac
+
+if [[ "$mode" == listener-flood && "$*" == "status --json listen" ]]; then
+  chunk="$(head -c 65536 /dev/zero | tr '\0' x)"
+  while true; do printf '%s' "$chunk"; done
+fi
 
 if [[ "$mode" == action-hang && "$*" == "account logout" ]]; then exec sleep 600; fi
 

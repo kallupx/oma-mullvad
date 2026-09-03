@@ -47,8 +47,24 @@ ShellRoot {
           root.elapsed = 0
           root.service.login("1234567890123456")
           actionDrain.start()
+        } else if (root.scenario === "listener-flood") {
+          root.elapsed = 0
+          listenerDrain.start()
         } else root.finish("")
       } else if (root.elapsed > 10000) root.finish("read queue did not drain")
+    }
+  }
+
+  Timer {
+    id: listenerDrain
+    interval: 50
+    repeat: true
+    onTriggered: {
+      root.elapsed += interval
+      if (root.service._listenerOverflowCount > 0) {
+        stop()
+        root.finish("")
+      } else if (root.elapsed > 5000) root.finish("listener output limit did not fire")
     }
   }
 
@@ -80,6 +96,7 @@ ShellRoot {
       readWatchdogs: service._readWatchdogFiredCount,
       actionWatchdogs: service._actionWatchdogFiredCount,
       readOverflows: service._readOverflowCount,
+      listenerOverflows: service._listenerOverflowCount,
       readChars: service._readOutputChars,
       scenario: root.scenario,
       removedRefreshStarted: root.removedRefreshStarted,

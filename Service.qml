@@ -64,11 +64,15 @@ Item {
   property int _pendingStatusSeq: 0
   property var _readLines: []
   property var _readErrorLines: []
+  property string _readOutputRemainder: ""
+  property string _readErrorRemainder: ""
   property int _readOutputLines: 0
   property int _readOutputChars: 0
   property var _actionQueue: []
   property var _actionLines: []
   property var _actionErrorLines: []
+  property string _actionOutputRemainder: ""
+  property string _actionErrorRemainder: ""
   property int _actionOutputLines: 0
   property int _actionOutputChars: 0
   readonly property bool busy: actionProcess.running || _actionQueue.length > 0
@@ -77,10 +81,12 @@ Item {
   property bool _actionWatchdogFired: false
   property bool _readOverflowed: false
   property bool _actionOverflowed: false
+  property bool _listenerOverflowed: false
   property int _readWatchdogFiredCount: 0
   property int _actionWatchdogFiredCount: 0
   property int _readOverflowCount: 0
   property int _actionOverflowCount: 0
+  property int _listenerOverflowCount: 0
   property int _readArmedPid: 0
   property int _actionArmedPid: 0
   property int _readGen: 0
@@ -107,7 +113,39 @@ Item {
     root["_" + kind + "ErrorLines"] = []
     root["_" + kind + "OutputLines"] = 0
     root["_" + kind + "OutputChars"] = 0
+    root["_" + kind + "OutputRemainder"] = ""
+    root["_" + kind + "ErrorRemainder"] = ""
     root["_" + kind + "Overflowed"] = false
+  }
+
+  function _appendOutputChunk(kind, chunk, errorStream) {
+    if (root["_" + kind + "Overflowed"]) return
+    var remainderKey = "_" + kind + (errorStream ? "ErrorRemainder" : "OutputRemainder")
+    var value = String(root[remainderKey] || "") + String(chunk || "")
+    var newline = value.indexOf("\n")
+    while (newline >= 0 && !root["_" + kind + "Overflowed"]) {
+      var line = value.slice(0, newline)
+      if (line.slice(-1) === "\r") line = line.slice(0, -1)
+      _appendOutput(kind, line, errorStream)
+      value = value.slice(newline + 1)
+      newline = value.indexOf("\n")
+    }
+    root[remainderKey] = value
+    var outputKey = "_" + kind + "OutputRemainder"
+    var errorKey = "_" + kind + "ErrorRemainder"
+    var pendingChars = root[outputKey].length + root[errorKey].length
+    var remaining = finiteOutputChars - root["_" + kind + "OutputChars"]
+    if (!root["_" + kind + "Overflowed"] && pendingChars >= remaining)
+      _flushOutputRemainders(kind)
+  }
+
+  function _flushOutputRemainders(kind) {
+    var output = root["_" + kind + "OutputRemainder"]
+    var error = root["_" + kind + "ErrorRemainder"]
+    root["_" + kind + "OutputRemainder"] = ""
+    root["_" + kind + "ErrorRemainder"] = ""
+    if (output) _appendOutput(kind, output, false)
+    if (error) _appendOutput(kind, error, true)
   }
 
   function _appendOutput(kind, line, errorStream) {
@@ -606,6 +644,7 @@ Item {
     readWatchdog.stop()
     readKillTimer.stop()
     var kind = root._readKind
+    _flushOutputRemainders("read")
     root._readKind = ""
     if (startError) root._applyRead(kind, "", startError, exitCode)
     else if (root._readWatchdogFired) {
@@ -637,10 +676,12 @@ Item {
       }
     }
     stdout: SplitParser {
-      onRead: function(line) { root._appendReadOutput(line, false) }
+      splitMarker: ""
+      onRead: function(chunk) { root._appendOutputChunk("read", chunk, false) }
     }
     stderr: SplitParser {
-      onRead: function(line) { root._appendReadOutput(line, true) }
+      splitMarker: ""
+      onRead: function(chunk) { root._appendOutputChunk("read", chunk, true) }
     }
     onExited: function(exitCode, exitStatus) {
       root._readExitedGen = root._readGen
@@ -652,28 +693,72 @@ Item {
     id: listenerProcess
     command: ["mullvad", "status", "--json", "listen"]
     running: false
+    property string outputRemainder: ""
+    property string errorRemainder: ""
+    onStarted: {
+      outputRemainder = ""
+      errorRemainder = ""
+      root._listenerOverflowed = false
+    }
     stdout: SplitParser {
-      onRead: function(line) {
-        var boundedLine = String(line || "").slice(0, root.listenerLineChars)
-        if (!boundedLine.trim() || !Model.isTunnelStateEvent(boundedLine)) return
-        try {
-          root._applyStatus(boundedLine, ++root._statusSeq)
-        } catch (e) {
-          root.lastError = root._shortError(e, "Could not parse live Mullvad status")
-        }
-      }
+      splitMarker: ""
+      onRead: function(chunk) { root._appendListenerChunk(chunk, false) }
     }
     stderr: SplitParser {
-      onRead: function(line) {
-        var boundedLine = String(line || "").slice(0, root.listenerLineChars)
-        if (boundedLine.trim()) root.lastError = root._shortError(boundedLine, "Mullvad status listener failed")
-      }
+      splitMarker: ""
+      onRead: function(chunk) { root._appendListenerChunk(chunk, true) }
     }
     onExited: function() {
       if (root.installed) {
         root.refreshStatus()
         listenerRestart.restart()
       }
+    }
+  }
+
+  function _appendListenerChunk(chunk, errorStream) {
+    if (_listenerOverflowed) return
+    var key = errorStream ? "errorRemainder" : "outputRemainder"
+    var value = String(listenerProcess[key] || "") + String(chunk || "")
+    var newline = value.indexOf("\n")
+    while (newline >= 0) {
+      var line = value.slice(0, newline)
+      if (line.slice(-1) === "\r") line = line.slice(0, -1)
+      if (line.length > listenerLineChars) {
+        _overflowListener()
+        return
+      }
+      _applyListenerLine(line, errorStream)
+      value = value.slice(newline + 1)
+      newline = value.indexOf("\n")
+    }
+    if (value.length > listenerLineChars) {
+      _overflowListener()
+      return
+    }
+    listenerProcess[key] = value
+  }
+
+  function _overflowListener() {
+    _listenerOverflowed = true
+    _listenerOverflowCount++
+    listenerProcess.outputRemainder = ""
+    listenerProcess.errorRemainder = ""
+    lastError = "Mullvad status listener output limit exceeded"
+    if (listenerProcess.running) listenerProcess.signal(15)
+  }
+
+  function _applyListenerLine(line, errorStream) {
+    if (!line.trim()) return
+    if (errorStream) {
+      lastError = _shortError(line, "Mullvad status listener failed")
+      return
+    }
+    if (!Model.isTunnelStateEvent(line)) return
+    try {
+      _applyStatus(line, ++_statusSeq)
+    } catch (e) {
+      lastError = _shortError(e, "Could not parse live Mullvad status")
     }
   }
 
@@ -703,6 +788,7 @@ Item {
     actionWatchdog.stop()
     actionKillTimer.stop()
     actionProcess.secret = ""
+    _flushOutputRemainders("action")
     var label = actionProcess.label
     var success = false
     if (startError) {
@@ -767,10 +853,12 @@ Item {
       }
     }
     stdout: SplitParser {
-      onRead: function(line) { root._appendActionOutput(line, false) }
+      splitMarker: ""
+      onRead: function(chunk) { root._appendOutputChunk("action", chunk, false) }
     }
     stderr: SplitParser {
-      onRead: function(line) { root._appendActionOutput(line, true) }
+      splitMarker: ""
+      onRead: function(chunk) { root._appendOutputChunk("action", chunk, true) }
     }
     onExited: function(exitCode, exitStatus) {
       root._actionExitedGen = root._actionGen
