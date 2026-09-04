@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+mock_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+fixtures="$mock_dir/../fixtures/cli"
+mode="${MULLVAD_MOCK_MODE:-ok}"
+
+if [[ -n "${MULLVAD_MOCK_LOG:-}" ]]; then
+  printf 'PID=%s MODE=%s ARGV: %s\n' "$$" "$mode" "$*" >> "$MULLVAD_MOCK_LOG"
+fi
+
+case "$mode" in
+  hang) exec sleep 600 ;;
+  flood)
+    chunk="$(head -c 65536 /dev/zero | tr '\0' x)"
+    while true; do printf '%s' "$chunk"; done
+    ;;
+esac
+
+if [[ "$mode" == listener-flood && "$*" == "status --json listen" ]]; then
+  chunk="$(head -c 65536 /dev/zero | tr '\0' x)"
+  while true; do printf '%s' "$chunk"; done
+fi
+
+if [[ "$mode" == action-hang && "$*" == "account logout" ]]; then exec sleep 600; fi
+
+if [[ "${1:-}" == account && "${2:-}" == login ]]; then
+  IFS= read -r line || line=""
+  [[ -n "$line" ]] || exit 2
+  printf 'login-received-len=%s\n' "${#line}" >> "$MULLVAD_MOCK_LOG"
+  exit 0
+fi
+
+if [[ "$mode" == fail && "$*" != --version ]]; then
+  echo "mock failure" >&2
+  exit 2
+fi
+
+case "$*" in
+  --version) cat "$fixtures/version.txt" ;;
+  "status --json") cat "$fixtures/status-json.txt" ;;
+  "status --json listen") cat "$fixtures/status-json.txt"; exec sleep 600 ;;
+  "account get") cat "$fixtures/account-get.txt" ;;
+  "relay list") cat "$fixtures/relay-list.txt" ;;
+  "relay get") cat "$fixtures/relay-get.txt" ;;
+  "lockdown-mode get") echo "Block traffic when the VPN is disconnected: off" ;;
+  "auto-connect get") echo "Autoconnect: off" ;;
+  "lan get") echo "Local network sharing setting: block" ;;
+  "dns get") printf 'Custom DNS: no\nBlock ads: false\nBlock trackers: false\nBlock malware: false\n' ;;
+  "anti-censorship get") printf 'mode: auto\nudp2tcp settings: any port\n' ;;
+  "split-tunnel list") echo "Excluded PIDs:" ;;
+  connect|disconnect) echo ok ;;
+  *) echo "unhandled mock invocation: $*" >&2; exit 2 ;;
+esac
